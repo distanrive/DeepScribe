@@ -1,0 +1,7 @@
+.idea/
+__pycache__/
+input/
+output/
+oldversion/
+.env
+CLAUDE.md
