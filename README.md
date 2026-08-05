@@ -96,12 +96,25 @@ python main.py -i ./input --force          # 强制重新 MinerU
 ### 推荐配置（GPU + deepseek-v4-flash）
 
 ```bash
+DEEPSEEK_BASE_URL=https://api.deepseek.com
 DEEPSEEK_MODEL=deepseek-v4-flash
+MAX_TOKENS=65536
+TRANSLATE_TEMP=0.3
+USE_THINKING=false
+REASONING_EFFORT=high
+
+TARGET_TOKENS_PER_CALL=30000
+MAX_PARAS_PER_CALL=200           # v4-flash 200 段 marker ~100%
+MIN_MARKER_RETENTION=0.95
+
 MINERU_BACKEND=hybrid-engine
+MINERU_EFFORT=medium
+MINERU_TIMEOUT=1800
+
 ENABLE_PARALLEL=true
 MAX_PARALLEL_WORKERS=64
-MAX_PARALLEL_MINERU=1
-MAX_PARAS_PER_CALL=200           # v4-flash 200 段 marker ~100%
+MAX_PARALLEL_MINERU=1            # 8 GB 显卡不建议并行
+
 ENABLE_INTEGRITY=true
 ```
 
