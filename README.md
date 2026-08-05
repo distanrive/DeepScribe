@@ -8,11 +8,9 @@
 
 | 指标 | 数据 |
 |---|---|
-| 600 页物理教材 + 论文集 | **~30 分钟** |
-| 翻译章数 | 21 章并行 |
-| API 费用 | **~¥2**（deepseek-v4-flash） |
-| GPU 要求 | RTX 4060 8 GB / hybrid-engine |
-| MinerU 精度 | ~95（OmniDocBench v1.6） |
+| 600 页物理教材 | **~30 分钟** |
+| API 费用       | **~¥2**（deepseek-v4-flash）  |
+| GPU 要求       | RTX 4060 8 GB / hybrid-engine |
 
 ## 特性
 
@@ -104,7 +102,7 @@ USE_THINKING=false
 REASONING_EFFORT=high
 
 TARGET_TOKENS_PER_CALL=30000
-MAX_PARAS_PER_CALL=200           # v4-flash 200 段 marker ~100%
+MAX_PARAS_PER_CALL=200
 MIN_MARKER_RETENTION=0.95
 
 MINERU_BACKEND=hybrid-engine
@@ -113,7 +111,7 @@ MINERU_TIMEOUT=1800
 
 ENABLE_PARALLEL=true
 MAX_PARALLEL_WORKERS=64
-MAX_PARALLEL_MINERU=1            # 8 GB 显卡不建议并行
+MAX_PARALLEL_MINERU=1
 
 ENABLE_INTEGRITY=true
 ```
@@ -122,17 +120,17 @@ ENABLE_INTEGRITY=true
 
 | 变量 | 说明 | 默认 |
 |---|---|---|
-| `DEEPSEEK_MODEL` | 模型名称 | `deepseek-v4-pro` |
+| `DEEPSEEK_MODEL` | 模型名称 | `deepseek-v4-flash` |
 | `MAX_TOKENS` | 单次输出上限 | `65536` |
 | `TRANSLATE_TEMP` | 温度 | `0.3` |
 | `TARGET_TOKENS_PER_CALL` | 每次目标 token（输入侧） | `30000` |
-| `MAX_PARAS_PER_CALL` | 每次段落上限 | `120` |
+| `MAX_PARAS_PER_CALL` | 每次段落上限 | `200` |
 | `MIN_MARKER_RETENTION` | marker 保留率阈值 | `0.95` |
-| `MINERU_BACKEND` | `pipeline` / `hybrid-engine` / `vlm-engine` | `pipeline` |
+| `MINERU_BACKEND` | `pipeline` / `hybrid-engine` / `vlm-engine` | `hybrid-engine` |
 | `MINERU_EFFORT` | hybrid 强度 `medium` / `high` | `medium` |
 | `MINERU_TIMEOUT` | 单次超时（秒） | `1800` |
-| `ENABLE_PARALLEL` | 并行翻译 | `false` |
-| `MAX_PARALLEL_WORKERS` | 翻译并发数 | `4` |
+| `ENABLE_PARALLEL` | 并行翻译 | `true` |
+| `MAX_PARALLEL_WORKERS` | 翻译并发数 | `64` |
 | `MAX_PARALLEL_MINERU` | MinerU 并发数（8 GB 显卡建议 1） | `1` |
 | `ENABLE_INTEGRITY` | 行内公式/代码校验回填 | `true` |
 
