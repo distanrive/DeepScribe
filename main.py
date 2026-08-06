@@ -67,7 +67,6 @@ def normalize_md(text: str) -> str:
 
     return text
 
-
 # ---------- token estimation & chunking ----------
 
 def estimate_tokens(text: str) -> int:
