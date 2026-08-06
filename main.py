@@ -17,7 +17,7 @@ from db import TranslationDB
 from translator import DeepSeekTranslator
 from integrity import verify_block
 from bookmark_utils import (
-    extract_bookmarks, has_sub_bookmarks, split_pdf_by_bookmarks,
+    extract_bookmarks, split_pdf_by_bookmarks,
 )
 
 logger = setup_logger(__name__)
@@ -1081,7 +1081,7 @@ def process_pdf(pdf_path: Path, output_dir: Path, force: bool = False,
     # --- 并行模式检测（先于完整 PDF 的 MinerU，避免浪费）---
     if parallel:
         bookmarks, total_pages = extract_bookmarks(pdf_path)
-        if bookmarks and has_sub_bookmarks(bookmarks):
+        if bookmarks:
             try:
                 _process_pdf_parallel(
                     output_dir, pdf_path, _stem,
@@ -1091,7 +1091,7 @@ def process_pdf(pdf_path: Path, output_dir: Path, force: bool = False,
             except Exception as e:
                 logger.warning(f"并行模式失败 ({e})，退回串行处理")
         else:
-            logger.info("无有效多级书签，退回串行模式")
+            logger.info("PDF 无书签，退回串行模式")
 
     # --- 串行模式（完整 PDF → MinerU → 翻译）---
 

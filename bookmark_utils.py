@@ -53,18 +53,6 @@ def extract_bookmarks(pdf_path: str | Path) -> tuple[list[tuple[int, str, int]],
         return [], 0
 
 
-def has_sub_bookmarks(bookmarks: list[tuple[int, str, int]]) -> bool:
-    """
-    判断书签是否包含子层级（level >= 2）。
-
-    只有一级书签时无法切分章节内部，此时并行模式的收益有限，
-    退回串行并使用现有 fix_headings 逻辑。
-    """
-    if not bookmarks:
-        return False
-    return any(lvl >= 2 for lvl, _, _ in bookmarks)
-
-
 def split_pdf_by_bookmarks(pdf_path: str | Path,
                             bookmarks: list[tuple[int, str, int]],
                             total_pages: int,
