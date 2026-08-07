@@ -49,6 +49,10 @@ MAX_PARALLEL_WORKERS = int(os.getenv("MAX_PARALLEL_WORKERS", "4"))
 # 每个 hybrid-engine 实例约需 2-3 GB 显存；8 GB 显卡建议 ≤ 2
 MAX_PARALLEL_MINERU = int(os.getenv("MAX_PARALLEL_MINERU", "1"))
 
+# 大章二次拆分阈值（页数）。某章超过此页数时，尝试用二级书签进一步拆分。
+# 设为 0 禁用二次拆分。
+MAX_CHAPTER_PAGES = int(os.getenv("MAX_CHAPTER_PAGES", "100"))
+
 # --- 完整性校验设置 ---
 # 校验译文内嵌行内公式/行内代码是否被破坏并自动回填（无额外 API、只回填+告警）
 ENABLE_INTEGRITY = os.getenv("ENABLE_INTEGRITY", "true").lower() in ("true", "1", "yes")

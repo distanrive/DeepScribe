@@ -8,7 +8,7 @@ from threading import Semaphore
 from config import (
     MINERU_BACKEND, TARGET_TOKENS_PER_CALL, MAX_PARAS_PER_CALL,
     MIN_MARKER_RETENTION, ENABLE_PARALLEL, MAX_PARALLEL_WORKERS,
-    MAX_PARALLEL_MINERU, MAX_TOKENS,
+    MAX_PARALLEL_MINERU, MAX_CHAPTER_PAGES, MAX_TOKENS,
     ENABLE_INTEGRITY,
 )
 from utils import setup_logger
@@ -907,7 +907,8 @@ def _process_pdf_parallel(output_dir: Path, pdf_path: Path, _stem: str,
     # 1. 按书签页码拆分 PDF → 子 PDF
     sub_pdfs_dir = output_dir / f"{_stem}_parts"
     sub_pdfs = split_pdf_by_bookmarks(pdf_path, bookmarks, total_pages,
-                                       sub_pdfs_dir, _stem)
+                                       sub_pdfs_dir, _stem,
+                                       max_chapter_pages=MAX_CHAPTER_PAGES)
     if len(sub_pdfs) < 2:
         logger.info("PDF 拆分后仅 1 份，退回串行处理")
         raise ValueError("无法拆分为多章节")

@@ -14,13 +14,15 @@
 
 ## 特性
 
-- **按页拆分 PDF** — 书签页码精确切分，每章独立送 MinerU
-- **流式流水线** — MinerU + 翻译 Semaphore 并发控制，GPU 显存安全
-- **批量翻译** — `[BLK:N]` 标记机制，Token 感知分块，自适应 marker 保留率
-- **断点续传** — SQLite 缓存译文，中断重跑不重复翻译
-- **G2 完整性校验** — 行内公式/代码损坏自动检测并回填原文，零额外 API
-- **图片处理** — 每章独立 assets + 合并后统一 assets，图片引用容错匹配
-- **批处理** — 递归扫描输入目录，镜像输出结构
+- **公式全解析** — MinerU 高精度提取行内/显示 LaTeX 公式，翻译时自动保护不译；G2 完整性校验检测 LLM 损坏的公式并回填原文
+- **图片全保留** — 自动提取 PDF 内嵌图片，去重重编号，复制到独立 assets 目录；支持外部 URL 图片原样保留
+- **标题层级保留** — 智能识别 Markdown 标题编号层级（1, 1.1, 1.1.1），自动修正 `#` 深度；检测字典序倒退、非标准编号，误判标题降为正文
+- **按页拆分 PDF** — 书签页码精确切分，每章独立送 MinerU；**大章自动二次拆分**（超过阈值用二级书签切子章），避免单章瓶颈
+- **解析翻译异步并行** — MinerU 解析与 DeepSeek 翻译流水线并行，Semaphore 控制 GPU 显存，翻译不限并发
+- **批量翻译** — `[BLK:N]` 标记机制，Token 感知分块（回溯搜索语义断点），自适应 marker 保留率
+- **断点续传** — SQLite 缓存译文（UPSERT，内容变化自动重置），中断重跑不重复翻译
+- **表格完整还原** — HTML 表格自动转 Markdown，rowspan/colspan 展开，表格内图片行内化
+- **批处理** — 递归扫描输入目录，镜像输出结构，单文件失败不中止批次
 
 ## 环境配置
 
@@ -112,6 +114,7 @@ MINERU_TIMEOUT=1800
 ENABLE_PARALLEL=true
 MAX_PARALLEL_WORKERS=64
 MAX_PARALLEL_MINERU=1
+MAX_CHAPTER_PAGES=100
 
 ENABLE_INTEGRITY=true
 ```
@@ -132,6 +135,7 @@ ENABLE_INTEGRITY=true
 | `ENABLE_PARALLEL` | 并行翻译 | `true` |
 | `MAX_PARALLEL_WORKERS` | 翻译并发数 | `64` |
 | `MAX_PARALLEL_MINERU` | MinerU 并发数（8 GB 显卡建议 1） | `1` |
+| `MAX_CHAPTER_PAGES` | 大章二次拆分阈值（页数），0=禁用 | `100` |
 | `ENABLE_INTEGRITY` | 行内公式/代码校验回填 | `true` |
 
 ## 输出结构
@@ -154,6 +158,7 @@ output/
 ```
 PDF
  ├─ [1] 提取书签 → 按页范围拆分 PDF (PyMuPDF)
+ │     大章 (> MAX_CHAPTER_PAGES 页) 自动用二级书签二次拆分
  ├─ [2] 流式处理 (Semaphore 控制 MinerU 并发)
  │       每章: MinerU → process_images(独立 assets) → translate_blocks
  ├─ [3] 合并 zh/en + 统一图片处理
