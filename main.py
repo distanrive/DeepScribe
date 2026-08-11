@@ -1,7 +1,10 @@
 import argparse
 import hashlib
+import os
 import re
 import shutil
+import tempfile
+from contextlib import nullcontext
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Semaphore
@@ -21,6 +24,9 @@ from bookmark_utils import (
 )
 
 logger = setup_logger(__name__)
+
+# 临时文件目录（中间产物统一存放）
+_TEMP_ROOT = Path(tempfile.gettempdir()) / "DeepScribe"
 
 # ---------- text normalization ----------
 
@@ -804,46 +810,50 @@ def _cleanup_chapter_db(db_path: Path) -> None:
 
 def _process_chapter_pdf(order: int, title: str, pdf_path: Path | None,
                           output_dir: Path, _stem: str,
-                          md_text: str | None = None) -> dict[str, object]:
+                          md_text: str | None = None,
+                          temp_dir: Path | None = None) -> dict[str, object]:
     """
     处理单个章节 PDF：MinerU 解析（或跳过）→ 翻译 → 组装。
-
-    若传入 md_text（已预处理含图片引用），则跳过 MinerU 步骤直接翻译。
-    用于流式流水线中每章 Semaphore 保护 MinerU + 独立图片处理后调用。
 
     Args:
         order: 章节序号
         title: 章节标题
         pdf_path: 子 PDF 路径（仅 md_text=None 时使用）
-        output_dir: 输出目录
+        output_dir: 最终输出目录
         _stem: 内部短名
         md_text: 已预处理的 MD 文本（可选，跳过 MinerU）
+        temp_dir: 中间产物目录
 
     Returns:
-        dict 含 order, title, zh_text, en_text, warnings, blocks, trans_map
+        dict 含 order, title, zh_text, en_text, warnings
     """
+    if temp_dir is None:
+        temp_dir = _ensure_temp_dir()
+
     if md_text is None:
-        # --- MinerU 模式（兼容直接调用）---
         if pdf_path is None:
             raise ValueError("md_text 为 None 时必须提供 pdf_path")
         logger.info(f"[{title}] MinerU 解析中...")
-        chapter_mineru_out = output_dir / f"{_stem}_ch{order}_mineru"
+        chapter_mineru_out = temp_dir / f"{_stem}_ch{order}_mineru"
         md_path, images_dir = run_mineru(pdf_path, chapter_mineru_out,
                                           backend=MINERU_BACKEND)
         with open(md_path, "r", encoding="utf-8") as f:
             md_text = f.read()
         md_text = normalize_md(md_text)
-        md_text, _ = process_images(md_text, images_dir, output_dir,
+        # 每章独立图片处理到 temp part 目录
+        _part_dir = temp_dir / "part"
+        _part_dir.mkdir(parents=True, exist_ok=True)
+        md_text, _ = process_images(md_text, images_dir, _part_dir,
                                      f"{_stem}_ch{order}", quiet=True)
     else:
         logger.info(f"[{title}] 使用预处理 MD，开始翻译")
 
-    # --- 翻译 + 组装（两种模式共用）---
+    # --- 翻译 + 组装 ---
     blocks = split_md_blocks(md_text)
     text_count = sum(1 for b in blocks if b['type'] == 'text')
     logger.info(f"[{title}] 切分为 {len(blocks)} 块 (文本 {text_count})")
 
-    db_path = output_dir / f"{_stem}_ch{order}_translate.db"
+    db_path = temp_dir / f"{_stem}_ch{order}_translate.db"
     db = TranslationDB(db_path)
     try:
         translator = DeepSeekTranslator()
@@ -879,33 +889,33 @@ def _process_chapter_pdf(order: int, title: str, pdf_path: Path | None,
     return {
         'order': order, 'title': title,
         'zh_text': zh_text, 'en_text': en_text,
-        'warnings': zh_warnings, 'blocks': blocks,
-        'trans_map': trans_map,
+        'warnings': zh_warnings,
     }
 
 
 def _process_pdf_parallel(output_dir: Path, pdf_path: Path, _stem: str,
                           bookmarks: list[tuple[int, str, int]], total_pages: int,
-                          label: str = "") -> None:
+                          label: str = "", temp_dir: Path | None = None,
+                          progress_callback=None, mineru_lock=None) -> None:
     """
     并行翻译流程：按书签页码拆分 PDF → 各章独立 MinerU + 翻译 → 合并 → 后处理。
 
-    与旧版不同：不再依赖 MD 文本中的标题模糊匹配来切分，
-    而是直接用 PyMuPDF 按页范围拆分子 PDF，每章独立送 MinerU，
-    从根本上解决切分不准的问题。
-
     Args:
-        output_dir: 输出目录
+        output_dir: 最终输出目录（zh/en.md, assets, parts）
         pdf_path: 源 PDF 路径
-        _stem: 内部短名（DB、中间文件路径用）
+        _stem: 内部短名
         bookmarks: [(level, title, page), ...]
         total_pages: PDF 总页数
-        label: 输出文件名前缀（zh/en.md 用）；默认回退到 _stem
+        label: 输出文件名前缀
+        temp_dir: 中间产物目录
     """
+    if temp_dir is None:
+        temp_dir = _ensure_temp_dir()
+
     _out = label or _stem
 
-    # 1. 按书签页码拆分 PDF → 子 PDF
-    sub_pdfs_dir = output_dir / f"{_stem}_parts"
+    # 1. 拆分 PDF → 子 PDF（放临时目录）
+    sub_pdfs_dir = temp_dir / f"{_stem}_parts"
     sub_pdfs = split_pdf_by_bookmarks(pdf_path, bookmarks, total_pages,
                                        sub_pdfs_dir, _stem,
                                        max_chapter_pages=MAX_CHAPTER_PAGES)
@@ -913,36 +923,45 @@ def _process_pdf_parallel(output_dir: Path, pdf_path: Path, _stem: str,
         logger.info("PDF 拆分后仅 1 份，退回串行处理")
         raise ValueError("无法拆分为多章节")
 
-    # 2. 流式处理：MinerU (Semaphore) → process_images (每章独立 assets) → 翻译
+    # 2. 流式处理
     chapter_results = []
     failures = []
     mineru_sem = Semaphore(MAX_PARALLEL_MINERU)
 
     def _do_chapter(_i: int, _title: str, _sub_pdf_path: Path) -> dict:
-        """单个章节：Semaphore 保护 MinerU → 独立图片 assets → 翻译。"""
+        """单个章节：Semaphore 保护 MinerU → 独立图片 → 翻译。"""
+        if progress_callback:
+            progress_callback(_i, "parsing", _title)
         with mineru_sem:
-            _chapter_mineru_out = output_dir / f"{_stem}_ch{_i}_mineru"
-            _md_path, _images_dir = run_mineru(_sub_pdf_path, _chapter_mineru_out,
-                                                backend=MINERU_BACKEND)
-            with open(_md_path, "r", encoding="utf-8") as _f:
-                _md_text = _f.read()
-            _md_text = normalize_md(_md_text)
+            # GUI 跨进程 MinerU 全局并发限制（GPU 显存保护），无锁时退化为 nullcontext
+            with (mineru_lock() if mineru_lock else nullcontext()):
+                _chapter_mineru_out = temp_dir / f"{_stem}_ch{_i}_mineru"
+                _md_path, _images_dir = run_mineru(_sub_pdf_path, _chapter_mineru_out,
+                                                    backend=MINERU_BACKEND)
+                with open(_md_path, "r", encoding="utf-8") as _f:
+                    _md_text = _f.read()
+                _md_text = normalize_md(_md_text)
 
-            # 每章独立图片处理：生成 part/{_stem}_ch{order}_zh.assets/
-            _part_dir = output_dir / "part"
-            _part_dir.mkdir(parents=True, exist_ok=True)
-            _md_text, _ch_assets = process_images(
-                _md_text, _images_dir, _part_dir,
-                f"{_stem}_ch{_i}", quiet=True
-            )
-            logger.info(f"  [{_title}] MinerU 完成 ({len(_md_text):,} 字符)")
+                # 每章独立图片处理：放 temp part 目录
+                _temp_part_dir = temp_dir / "part"
+                _temp_part_dir.mkdir(parents=True, exist_ok=True)
+                _md_text, _ch_assets = process_images(
+                    _md_text, _images_dir, _temp_part_dir,
+                    f"{_stem}_ch{_i}", quiet=True
+                )
+                logger.info(f"  [{_title}] MinerU 完成 ({len(_md_text):,} 字符)")
 
-        # 翻译 (信号量外，无限制并发)
+        if progress_callback:
+            progress_callback(_i, "translating", _title)
         return _process_chapter_pdf(_i, _title, None, output_dir,
-                                     _stem, md_text=_md_text)
+                                     _stem, md_text=_md_text, temp_dir=temp_dir)
 
     logger.info(f"流式处理: {len(sub_pdfs)} 章, "
                 f"MinerU并发={MAX_PARALLEL_MINERU}, 翻译并发={MAX_PARALLEL_WORKERS}")
+    # 预发所有章节"等待中"，让 GUI 提前创建子行，避免子行首次出现就是"解析中"
+    for i, (title, _) in enumerate(sub_pdfs):
+        if progress_callback:
+            progress_callback(i, "queued", title)
     with ThreadPoolExecutor(max_workers=MAX_PARALLEL_WORKERS) as executor:
         _futures = {}
         for i, (title, sub_pdf_path) in enumerate(sub_pdfs):
@@ -954,37 +973,37 @@ def _process_pdf_parallel(output_dir: Path, pdf_path: Path, _stem: str,
             try:
                 result = f.result()
                 chapter_results.append(result)
+                if progress_callback:
+                    progress_callback(i, "done", title)
             except Exception as e:
                 logger.error(f"第 {i + 1} 章 [{title}] 处理失败: {e}")
+                if progress_callback:
+                    progress_callback(i, "error", title)
                 chapter_results.append({
                     'order': i, 'title': title,
                     'zh_text': f"<!-- ⚠️ 本章处理失败 -->\n{title}",
-                    'en_text': title, 'failed': True,
+                    'en_text': title,
                 })
                 failures.append({"kind": "章节", "name": title, "error": str(e)})
 
-    # 4. 按章节顺序合并
+    # 3. 合并
     chapter_results.sort(key=lambda x: x['order'])
-
-    zh_parts = []
-    en_parts = []
-    for cr in chapter_results:
-        zh_parts.append(cr['zh_text'])
-        en_parts.append(cr['en_text'])
+    zh_parts = [cr['zh_text'] for cr in chapter_results]
+    en_parts = [cr['en_text'] for cr in chapter_results]
     zh_text = '\n\n'.join(zh_parts)
     en_text = '\n\n'.join(en_parts)
 
-    # 5. 统一图片处理：收集各章 assets（加章前缀防冲突）→ 合并处理 → 只记一次日志
-    _merged_img_dir = output_dir / f"{_stem}_merged_img"
+    # 4. 统一图片处理：从 temp part 收集 → 重命名到最终 assets
+    _merged_img_dir = temp_dir / f"{_stem}_merged_img"
     _merged_img_dir.mkdir(parents=True, exist_ok=True)
+    _temp_part_dir = temp_dir / "part"
     for _i in range(len(sub_pdfs)):
-        _ch_assets = output_dir / "part" / f"{_stem}_ch{_i}_zh.assets"
+        _ch_assets = _temp_part_dir / f"{_stem}_ch{_i}_zh.assets"
         _ch_prefix = f"{_stem}_ch{_i}_zh.assets"
         if _ch_assets.is_dir():
             for _img in _ch_assets.iterdir():
                 if _img.is_file():
                     shutil.copy2(_img, _merged_img_dir / f"{_i:02d}_{_img.name}")
-        # 正则替换图片引用路径（宽容 LLM 引入的空格/格式变化）
         _esc = re.escape(_ch_prefix)
         _pat = re.compile(
             rf'(\(|<img\b[^>]*\bsrc=["\'])\s*{_esc}/([^)"\']+)',
@@ -993,17 +1012,13 @@ def _process_pdf_parallel(output_dir: Path, pdf_path: Path, _stem: str,
         zh_text = _pat.sub(_repl, zh_text)
         en_text = _pat.sub(_repl, en_text)
     if any(_merged_img_dir.iterdir()):
-        zh_text, assets_dir = process_images(
-            zh_text, _merged_img_dir, output_dir, _out
-        )
-        en_text, _ = process_images(
-            en_text, _merged_img_dir, output_dir, _out, quiet=True
-        )
+        zh_text, assets_dir = process_images(zh_text, _merged_img_dir, output_dir, _out)
+        en_text, _ = process_images(en_text, _merged_img_dir, output_dir, _out, quiet=True)
     else:
         assets_dir = output_dir / f"{_out}_zh.assets"
         assets_dir.mkdir(parents=True, exist_ok=True)
 
-    # 6. 清理临时文件
+    # 5. 清理 temp 中间文件
     try:
         shutil.rmtree(_merged_img_dir)
     except OSError:
@@ -1013,13 +1028,17 @@ def _process_pdf_parallel(output_dir: Path, pdf_path: Path, _stem: str,
     except OSError:
         pass
     for _i in range(len(sub_pdfs)):
-        _ch_mu = output_dir / f"{_stem}_ch{_i}_mineru"
+        _ch_mu = temp_dir / f"{_stem}_ch{_i}_mineru"
         try:
             shutil.rmtree(_ch_mu)
         except OSError:
             pass
+    try:
+        shutil.rmtree(_temp_part_dir)
+    except OSError:
+        pass
 
-    # 7. 后处理（在合并结果上）
+    # 6. 后处理
     zh_text = fix_table_rendering(zh_text)
     en_text = fix_table_rendering(en_text)
     zh_text = html_tables_to_md(zh_text)
@@ -1029,7 +1048,7 @@ def _process_pdf_parallel(output_dir: Path, pdf_path: Path, _stem: str,
     zh_text = dedup_adjacent_images(zh_text)
     en_text = dedup_adjacent_images(en_text)
 
-    # 8. 分章输出
+    # 7. 分章输出 → PDF 所在目录
     _part_dir = output_dir / "part"
     _part_dir.mkdir(parents=True, exist_ok=True)
     for cr in chapter_results:
@@ -1039,15 +1058,15 @@ def _process_pdf_parallel(output_dir: Path, pdf_path: Path, _stem: str,
             pf.write(cr['zh_text'])
     logger.info(f"分章输出: {len(chapter_results)} 章 → {_part_dir}")
 
-    # 9. 收集警告 + 失败报告
+    # 8. 警告 + 失败报告 → 输出到 PDF 所在目录
     all_warnings = []
     for cr in chapter_results:
         for w in cr.get('warnings', []):
             all_warnings.append(f"[{cr['title']}] {w}")
-    write_warnings_file(output_dir, _stem, all_warnings)
-    write_failure_report(output_dir, _stem, failures)
+    write_warnings_file(output_dir, _out, all_warnings)
+    write_failure_report(output_dir, _out, failures)
 
-    # 10. 写入最终文件
+    # 9. 写入最终文件
     zh_md_path = output_dir / f"{_out}_zh.md"
     en_md_path = output_dir / f"{_out}_en.md"
     with open(zh_md_path, "w", encoding="utf-8") as f:
@@ -1061,22 +1080,32 @@ def _process_pdf_parallel(output_dir: Path, pdf_path: Path, _stem: str,
 
 # ---------- main pipeline ----------
 
-def process_pdf(pdf_path: Path, output_dir: Path, force: bool = False,
-                 parallel: bool = None):
-    """处理单个 PDF：MinerU 解析 → 图片处理 → 翻译 → 输出
+def _ensure_temp_dir() -> Path:
+    """确保临时目录存在并返回路径。"""
+    _TEMP_ROOT.mkdir(parents=True, exist_ok=True)
+    return _TEMP_ROOT
 
-    Args:
-        pdf_path: PDF 文件路径
-        output_dir: 输出目录
-        force: 强制重新运行 MinerU
-        parallel: 是否启用并行模式（None=使用 ENABLE_PARALLEL 配置）
+
+def process_pdf(pdf_path: Path, output_dir: Path | None = None,
+                force: bool = False, parallel: bool = None,
+                temp_dir: Path | None = None,
+                progress_callback=None, mineru_lock=None):
+    """处理单个 PDF。progress_callback(chapter_order, title) 用于并行模式的章节通知。
+
+    mineru_lock: 可选，调用后返回上下文管理器的可调用对象，用于在 MinerU
+                 运行期间加全局并发锁（GUI 跨进程 GPU 显存保护）。
     """
     if parallel is None:
         parallel = ENABLE_PARALLEL
+    if output_dir is None:
+        output_dir = pdf_path.parent
+    if temp_dir is None:
+        temp_dir = _ensure_temp_dir()
 
-    pdf_stem = pdf_path.stem  # 原始名，仅用于日志
-    _stem = "_" + hashlib.sha256(pdf_stem.encode()).hexdigest()[:12]  # 内部短名
+    pdf_stem = pdf_path.stem
+    _stem = "_" + hashlib.sha256(pdf_stem.encode()).hexdigest()[:12]
     logger.info(f"短名 {_stem} ← {pdf_stem}")
+    logger.info(f"输出目录: {output_dir}")
 
     # --- 并行模式检测（先于完整 PDF 的 MinerU，避免浪费）---
     if parallel:
@@ -1085,56 +1114,69 @@ def process_pdf(pdf_path: Path, output_dir: Path, force: bool = False,
             try:
                 _process_pdf_parallel(
                     output_dir, pdf_path, _stem,
-                    bookmarks, total_pages, label=pdf_stem
+                    bookmarks, total_pages, label=pdf_stem,
+                    temp_dir=temp_dir,
+                    progress_callback=progress_callback,
+                    mineru_lock=mineru_lock,
                 )
-                return  # 并行模式完成
+                return
             except Exception as e:
                 logger.warning(f"并行模式失败 ({e})，退回串行处理")
         else:
             logger.info("PDF 无书签，退回串行模式")
 
-    # --- 串行模式（完整 PDF → MinerU → 翻译）---
+    # --- 串行模式 ---
+    if progress_callback:
+        progress_callback(-1, "parsing", pdf_stem)
+    mineru_out = temp_dir / f"{_stem}_mineru"
 
-    mineru_out = output_dir / f"{_stem}_mineru"
-
-    # 1. MinerU 解析 PDF → MD + images（兼容 pipeline: auto/ 和 hybrid: hybrid_auto/）
+    # 1. MinerU 解析
     md_path = mineru_out / _stem / "auto" / f"{_stem}.md"
     hybrid_md_path = mineru_out / _stem / "hybrid_auto" / f"{_stem}.md"
     if hybrid_md_path.exists():
         md_path = hybrid_md_path
     if force or not md_path.exists():
-        md_path, images_dir = run_mineru(pdf_path, mineru_out, backend=MINERU_BACKEND)
+        # GUI 跨进程 MinerU 全局并发限制（GPU 显存保护），无锁时退化为 nullcontext
+        with (mineru_lock() if mineru_lock else nullcontext()):
+            md_path, images_dir = run_mineru(pdf_path, mineru_out, backend=MINERU_BACKEND)
     else:
         images_dir = md_path.parent / "images"
         if not images_dir.is_dir():
             images_dir = md_path.parent
         logger.info(f"使用已有 MinerU 输出: {md_path}")
 
-    # 2. 读取 MD 原文
+    # 2. 读取 MD
     with open(md_path, "r", encoding="utf-8") as f:
         raw_md = f.read()
     logger.info(f"MD 文件大小: {len(raw_md):,} 字符")
 
-    # 2.5 文本规范化
+    # 2.5 规范化
     raw_md = normalize_md(raw_md)
 
-    # 3. 处理图片
+    # 3. 图片处理 → 输出到 PDF 所在目录
     new_md, assets_dir = process_images(raw_md, images_dir, output_dir, pdf_stem)
 
-    # 4. 切分 MD 为块
+    # 4. 切分
     blocks = split_md_blocks(new_md)
     text_count = sum(1 for b in blocks if b['type'] == 'text')
     latex_count = sum(1 for b in blocks if b['type'] == 'latex')
     logger.info(f"文档切分: {len(blocks)} 块 (文本 {text_count}, 公式 {latex_count})")
 
-    # 5. 翻译
-    db_path = output_dir / f"{_stem}_translate.db"
+    # 5. 翻译（DB 放临时目录）
+    if progress_callback:
+        progress_callback(-1, "translating", pdf_stem)
+    db_path = temp_dir / f"{_stem}_translate.db"
     db = TranslationDB(db_path)
 
-    translator = DeepSeekTranslator()
-    trans_map = translate_blocks(blocks, db, translator)
+    try:
+        translator = DeepSeekTranslator()
+        trans_map = translate_blocks(blocks, db, translator)
+    finally:
+        db.close()
+        if db_path.exists():
+            db_path.unlink()
 
-    # 6. 组装中文/英文 MD（G2 完整性校验：text 块内嵌行内公式/代码损坏则回填）
+    # 6. 组装
     zh_lines = []
     en_lines = []
     g2_warnings = []
@@ -1157,26 +1199,20 @@ def process_pdf(pdf_path: Path, output_dir: Path, force: bool = False,
     zh_text = "\n\n".join(zh_lines)
     en_text = "\n\n".join(en_lines)
 
-    # 标题层级修正（串行版 fix_headings）—— 仅用于中文版；
-    # EN 版保持原文结构，与并行模式一致，不做标题修正
+    # 标题修正
     zh_text, zh_warnings = fix_headings(zh_text)
     if zh_warnings:
         logger.info(f"中文版标题修正: {len(zh_warnings)} 处")
 
-    # 标题修正/G2 完整性警告写入独立日志文件（不污染 zh/en 输出）
-    write_warnings_file(output_dir, _stem, g2_warnings + zh_warnings)
+    write_warnings_file(output_dir, pdf_stem, g2_warnings + zh_warnings)
 
-    # 表格渲染修复（<img> 行内化 + 冗余属性清理）
+    # 后处理
     zh_text = fix_table_rendering(zh_text)
     en_text = fix_table_rendering(en_text)
-    # HTML 表格 → Markdown 表格（简单表格，公式可渲染）
     zh_text = html_tables_to_md(zh_text)
     en_text = html_tables_to_md(en_text)
-
-    # 输出侧再次归一化（LLM 可能引入异常换行符）
     zh_text = normalize_output(zh_text)
     en_text = normalize_output(en_text)
-    # 去重：LLM 可能复读图片引用
     zh_text = dedup_adjacent_images(zh_text)
     en_text = dedup_adjacent_images(en_text)
 
@@ -1187,15 +1223,6 @@ def process_pdf(pdf_path: Path, output_dir: Path, force: bool = False,
 
     logger.info(f"翻译完成! 中文版: {zh_md_path}")
     logger.info(f"英文版: {en_md_path}")
-
-    # 7. 清理
-    db.close()
-    if db_path.exists():
-        db_path.unlink()
-    # if mineru_out.exists():
-    #     shutil.rmtree(mineru_out)
-    #     logger.info("临时文件已清理")
-    logger.info(f"MinerU 输出保留: {mineru_out}")
 
 
 # ---------- CLI ----------

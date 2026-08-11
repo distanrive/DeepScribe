@@ -31,8 +31,10 @@
 ```bash
 conda create -n deepscribe python=3.10
 conda activate deepscribe
-pip install "mineru[all]" openai python-dotenv PyMuPDF
+pip install "mineru[all]" openai python-dotenv PyMuPDF PySide6 qt-material
 ```
+
+其中 PySide6 qt-material 仅GUI使用
 
 ### 2. CUDA 版 PyTorch（GPU 用户）
 
@@ -84,6 +86,37 @@ python main.py -i ./input --parallel       # 并行（需 PDF 含多级书签）
 python main.py -i ./input --no-parallel    # 强制串行
 python main.py -i ./input --force          # 强制重新 MinerU
 ```
+
+## GUI
+
+![Snipaste_2026-08-11_16-33-43](README.assets/Snipaste_2026-08-11_16-33-43.png)
+
+![Snipaste_2026-08-11_16-34-04](README.assets/Snipaste_2026-08-11_16-34-04.png)
+
+图形界面：拖放 PDF、批量处理、实时日志、配置面板（API Key 用 Windows DPAPI 加密存储）。
+
+```bash
+python -m gui.main                    # 命令行启动
+run_gui.bat                           # 双击启动（无控制台窗口）
+```
+
+`run_gui.bat` 内容示例（将路径改为你的 conda 环境）：
+
+```bat
+@echo off
+cd /d "%~dp0"
+start "" "C:\Users\YH\.conda\envs\deepscribe\pythonw.exe" -m gui.main
+```
+
+要点：
+- 配置保存在 `config.json`（首次运行自动生成），API Key 经 Windows DPAPI 加密，**不依赖 .env 文件**。
+- 默认值从 `config.py` 读取（CLI/GUI 共用同一份默认配置）。
+- 输出写到 **输入 PDF 所在目录**（`{stem}_zh.md` / `_en.md` / `_zh.assets/`）。
+- 每个文件以**独立子进程**运行流水线，配置即时生效；多文件并发互不干扰。
+- 并行模式下，文件列表显示各章子行（等待中 → 解析中 → 翻译中 → 完成/失败），父行统一显示"等待中/工作中/完成/部分失败"。
+- "停止" 会终止该文件的子进程树（`taskkill /T /F`，包括 MinerU），真正中断任务。
+- 勾选 **"强制重新解析 (MinerU)"** 可忽略缓存重新解析（切换解析后端后需要）。
+- 多文件同时处理时，MinerU 受全局并发限制（`MAX_PARALLEL_MINERU`，默认 1），避免 8 GB 显卡显存 OOM。
 
 ## 配置项
 
@@ -172,13 +205,25 @@ PDF
 ```
 DeepScribe/
 ├── main.py              # CLI、流水线编排、后处理
-├── config.py            # 环境变量配置
+├── config.py            # 环境变量默认配置 —— CLI/GUI 共用唯一来源
 ├── translator.py        # DeepSeek API 封装 ([BLK:N] 批量翻译)
 ├── integrity.py         # G2 行内公式/代码完整性校验
 ├── pdf_parser.py        # MinerU CLI 封装
 ├── db.py                # SQLite 断点续传缓存
 ├── bookmark_utils.py    # PDF 书签提取 + 按页拆分
 ├── utils.py             # logging
+├── gui/                 # 图形界面（PySide6）
+│   ├── main.py          #   GUI 入口
+│   ├── main_window.py   #   侧边栏导航 + 页面切换
+│   ├── workers.py       #   QThread 子进程管理
+│   ├── _runner.py       #   子进程流水线运行器
+│   ├── _gpu_lock.py     #   跨进程 MinerU 槽位锁
+│   ├── config_manager.py#   config.json + DPAPI
+│   ├── styles.py        #   自定义 CSS
+│   └── pages/           #   工作 / 配置 / 关于
+├── setup_env.bat        # 一键配置 conda 环境
+├── run_gui.bat          # GUI 启动脚本（无控制台窗口）
+├── config.json          # GUI 配置文件（自动生成）
 ├── .env.example         # 环境变量模板
 ├── tests/               # 单元测试 (80 用例)
 ├── input/               # 待翻译 PDF
