@@ -87,7 +87,7 @@ class AboutPage(QWidget):
 
         # ---- 开源协议 ----
         layout.addWidget(self._section("开源协议"))
-        layout.addWidget(self._body("MIT License — 自由使用、修改、分发"))
+        layout.addWidget(self._body("GPL-3.0 License — 自由使用、修改、分发（因依赖 GPL 的 PyQt5）"))
 
         # ---- GitHub ----
         layout.addWidget(self._section("项目地址"))

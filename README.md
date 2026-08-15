@@ -91,9 +91,9 @@ python main.py -i ./input --parse-only     # 仅解析（跳过翻译，输出 _
 
 ## GUI
 
-![Snipaste_2026-08-11_16-33-43](README.assets/Snipaste_2026-08-11_16-33-43.png)
+![Snipaste_2026-08-15_12-56-10](README.assets/Snipaste_2026-08-15_12-56-10.png)
 
-![Snipaste_2026-08-11_16-34-04](README.assets/Snipaste_2026-08-11_16-34-04.png)
+![Snipaste_2026-08-15_12-56-17](README.assets/Snipaste_2026-08-15_12-56-17.png)
 
 图形界面：拖放 PDF、批量处理、实时日志、配置面板（API Key 用 Windows DPAPI 加密存储）。
 
