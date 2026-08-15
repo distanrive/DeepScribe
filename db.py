@@ -28,6 +28,10 @@ class TranslationDB:
         self.cursor.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_para_index ON paragraphs(para_index)"
         )
+        # L9: prune 用临时表避免 NOT IN (?,?,...) 超出 SQLite 变量上限（旧版 999 / 新版 32766）
+        self.cursor.execute(
+            "CREATE TEMP TABLE IF NOT EXISTS _prune_keep (idx INTEGER PRIMARY KEY)"
+        )
         self.conn.commit()
 
     def store_paragraphs(self, entries: list[tuple[int, str]]):
@@ -51,10 +55,15 @@ class TranslationDB:
         if not keep_indices:
             self.cursor.execute("DELETE FROM paragraphs")
         else:
-            placeholders = ",".join("?" for _ in keep_indices)
+            # 通过临时表过滤，避免 NOT IN (?,...) 的占位符数量超出
+            # SQLite 变量上限（旧版 999 / 新版 32766）导致报错
+            self.cursor.execute("DELETE FROM _prune_keep")
+            self.cursor.executemany(
+                "INSERT INTO _prune_keep (idx) VALUES (?)",
+                [(i,) for i in keep_indices])
             self.cursor.execute(
-                f"DELETE FROM paragraphs WHERE para_index NOT IN ({placeholders})",
-                list(keep_indices))
+                "DELETE FROM paragraphs WHERE para_index NOT IN "
+                "(SELECT idx FROM _prune_keep)")
         self.conn.commit()
 
     def get_pending_paragraphs(self) -> list[tuple[int, str]]:

@@ -1,11 +1,12 @@
 """
 工作页面：文件拖放 → 状态表格(树) → 批量操作 → 日志
 """
+import html
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal, QTimer
-from PySide6.QtGui import QDragEnterEvent, QDropEvent, QFont, QColor
-from PySide6.QtWidgets import (
+from PyQt5.QtCore import Qt, pyqtSignal, QTimer
+from PyQt5.QtGui import QDragEnterEvent, QDropEvent, QColor
+from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QTreeWidget, QTreeWidgetItem, QHeaderView, QTextEdit,
     QFileDialog, QAbstractItemView, QCheckBox,
@@ -17,6 +18,10 @@ from gui.workers import ProcessWorker
 COL_FILE = 0
 COL_STATUS = 1
 COL_ACTION = 2
+
+# 子节点状态枚举存储角色（与列 0 的 UserRole 存放 chapter order 区分开），
+# 用于 _has_child_error 判定，避免依赖显示文案（改文案即失效）。
+ROLE_STATUS = Qt.UserRole + 1
 
 STATUS_LABELS = {
     "queued":      ("等待中", "#b0b0b0"),
@@ -40,16 +45,16 @@ class _CenteredHeader(QHeaderView):
     def paintSection(self, painter, rect, logicalIndex):
         old = self.defaultAlignment()
         if logicalIndex in self._centered_cols:
-            self.setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.setDefaultAlignment(Qt.AlignCenter)
         else:
             self.setDefaultAlignment(
-                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                Qt.AlignLeft | Qt.AlignVCenter)
         super().paintSection(painter, rect, logicalIndex)
         self.setDefaultAlignment(old)
 
 
 class DropZone(QWidget):
-    files_selected = Signal(list)
+    files_selected = pyqtSignal(list)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -57,26 +62,26 @@ class DropZone(QWidget):
         self.setMinimumHeight(130)
         self.setMaximumHeight(150)
         self.setObjectName("dropZone")
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setAttribute(Qt.WA_StyledBackground, True)
         self._setup_ui()
         self._update_border(False)
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
-        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.setAlignment(Qt.AlignCenter)
         icon_lbl = QLabel("📂")
-        icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        icon_lbl.setAlignment(Qt.AlignCenter)
         icon_lbl.setStyleSheet("font-size: 32px; background: transparent;")
         layout.addWidget(icon_lbl)
         hint = QLabel("拖放 PDF 文件到此处，或点击下方按钮选择")
-        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        hint.setAlignment(Qt.AlignCenter)
         hint.setStyleSheet("font-size: 13px; background: transparent;")
         layout.addWidget(hint)
         btn_row = QHBoxLayout()
-        btn_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        btn_row.setAlignment(Qt.AlignCenter)
         self._btn = QPushButton("选择 PDF 文件")
         self._btn.setObjectName("actionBtn")
-        self._btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn.setCursor(Qt.PointingHandCursor)
         self._btn.clicked.connect(self._on_click)
         btn_row.addWidget(self._btn)
         layout.addLayout(btn_row)
@@ -139,23 +144,23 @@ class WorkPage(QWidget):
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels(["文件名", "状态", "操作"])
         self.tree.setRootIsDecorated(True)
-        self.tree.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
-        self.tree.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.tree.setSelectionMode(QAbstractItemView.NoSelection)
+        self.tree.setFocusPolicy(Qt.NoFocus)
         self.tree.setIndentation(24)
         self.tree.setAnimated(True)
-        hdr = _CenteredHeader(Qt.Orientation.Horizontal, self.tree,
+        hdr = _CenteredHeader(Qt.Horizontal, self.tree,
                               centered_cols=(COL_STATUS, COL_ACTION))
         self.tree.setHeader(hdr)
         hdr.setStretchLastSection(False)
-        hdr.setSectionResizeMode(COL_FILE, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(COL_FILE, QHeaderView.Stretch)
         for c in (COL_STATUS, COL_ACTION):
-            hdr.setSectionResizeMode(c, QHeaderView.ResizeMode.Fixed)
+            hdr.setSectionResizeMode(c, QHeaderView.Fixed)
         self.tree.setColumnWidth(COL_STATUS, 110)
         self.tree.setColumnWidth(COL_ACTION, 180)
         layout.addWidget(self.tree, 3)
 
         btn_row = QHBoxLayout()
-        btn_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        btn_row.setAlignment(Qt.AlignCenter)
         btn_row.setSpacing(16)
         self._force_check = QCheckBox("强制重新解析 (MinerU)")
         self._force_check.setToolTip(
@@ -168,13 +173,17 @@ class WorkPage(QWidget):
         btn_row.addWidget(self._btn_all_start)
         btn_row.addWidget(self._btn_all_stop)
         btn_row.addWidget(self._btn_all_clear)
+        btn_row.addSpacing(8)
+        self._parse_only_check = QCheckBox("仅解析")
+        self._parse_only_check.setToolTip(
+            "只运行 MinerU 解析并输出 {文件名}_parsed.md，跳过翻译（省 API 费用）")
+        btn_row.addWidget(self._parse_only_check)
         layout.addLayout(btn_row)
 
         layout.addWidget(self._hdr("日志"))
         self.log_view = QTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.document().setMaximumBlockCount(2000)
-        self.log_view.setFont(QFont("Cascadia Code", 10))
         layout.addWidget(self.log_view, 2)
 
         self._update_batch_buttons()
@@ -201,7 +210,7 @@ class WorkPage(QWidget):
             if p in self._file_items:
                 continue
             item = QTreeWidgetItem()
-            item.setData(0, Qt.ItemDataRole.UserRole, p)
+            item.setData(0, Qt.UserRole, p)
             item.setText(COL_FILE, Path(p).name)
             item.setToolTip(COL_FILE, p)
             self._set_item_texts(item, "等待中", "#b0b0b0")
@@ -213,7 +222,7 @@ class WorkPage(QWidget):
 
     def _set_item_texts(self, item: QTreeWidgetItem, status_t: str, status_c: str):
         item.setText(COL_STATUS, status_t)
-        item.setTextAlignment(COL_STATUS, Qt.AlignmentFlag.AlignCenter)
+        item.setTextAlignment(COL_STATUS, Qt.AlignCenter)
         item.setForeground(COL_STATUS, QColor(status_c))
 
     def _action_btns(self, file_path: str) -> QWidget:
@@ -229,7 +238,7 @@ class WorkPage(QWidget):
             btn = QPushButton(text)
             btn.setObjectName("actionBtn")
             btn.setFixedSize(44, 24)
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setCursor(Qt.PointingHandCursor)
             btn.clicked.connect(lambda checked=False, cb=callback, p=fp: cb(p))
             lo.addWidget(btn)
         return w
@@ -239,7 +248,8 @@ class WorkPage(QWidget):
         if file_path in self._workers and self._workers[file_path].is_running():
             return
         worker = ProcessWorker(Path(file_path), self._config.export_env(),
-                               force=self._force_check.isChecked())
+                               force=self._force_check.isChecked(),
+                               parse_only=self._parse_only_check.isChecked())
         worker.signals.file_status.connect(self._on_file_status)
         worker.signals.log.connect(self._on_worker_log)
         worker.signals.finished.connect(self._on_finished)
@@ -316,9 +326,9 @@ class WorkPage(QWidget):
 
     @staticmethod
     def _has_child_error(item: QTreeWidgetItem) -> bool:
-        """检查 item 的所有子节点是否有 error 状态。"""
+        """检查 item 的所有子节点是否有 error 状态（按状态枚举，不依赖显示文案）。"""
         for i in range(item.childCount()):
-            if item.child(i).text(COL_STATUS) == STATUS_LABELS["error"][0]:
+            if item.child(i).data(0, ROLE_STATUS) == "error":
                 return True
         return False
 
@@ -336,12 +346,13 @@ class WorkPage(QWidget):
         child = None
         for i in range(item.childCount()):
             c = item.child(i)
-            if c.data(0, Qt.ItemDataRole.UserRole) == part_order:
+            if c.data(0, Qt.UserRole) == part_order:
                 child = c
                 break
         if child is None:
             child = QTreeWidgetItem()
-            child.setData(0, Qt.ItemDataRole.UserRole, part_order)
+            child.setData(0, Qt.UserRole, part_order)
+            child.setData(0, ROLE_STATUS, "queued")
             child.setText(COL_FILE, f"第 {part_order + 1} 章")
             self._set_item_texts(child, "等待中", "#b0b0b0")
             item.addChild(child)
@@ -349,6 +360,7 @@ class WorkPage(QWidget):
         if field == "title":
             child.setText(COL_FILE, f"第 {part_order + 1} 章: {value}")
         elif field == "status":
+            child.setData(0, ROLE_STATUS, value)
             label, color = STATUS_LABELS.get(value, (value, "#b0b0b0"))
             child.setText(COL_STATUS, label)
             child.setForeground(COL_STATUS, QColor(color))
@@ -376,6 +388,12 @@ class WorkPage(QWidget):
         self._log_queue.append((file_path, message))
 
     def _on_finished(self, file_path: str, success: bool, error_msg: str):
+        # M6: 竞态防护——旧 worker 的 finished 信号可能在用户重开后被延迟处理，
+        # 此时 _workers 已被新 worker 覆盖。比对信号发出者身份，避免误删新 worker，
+        # 否则「全部停止」/「停止」将找不到正在运行的新任务。
+        current = self._workers.get(file_path)
+        if current is not None and self.sender() is not current.signals:
+            return
         self._workers.pop(file_path, None)
         self._parts_status.pop(file_path, None)
         self._update_batch_buttons()
@@ -406,12 +424,14 @@ class WorkPage(QWidget):
         self._log_queue.clear()
         for fp, msg in batch:
             prefix = Path(fp).name if fp != "_system" else ""
+            # L6: 日志以 HTML 拼进 QTextEdit，转义 < > & 防止章节标题等破坏渲染
             if prefix:
                 self.log_view.append(
-                    f"<span style='color:{COLORS['primary']}'><b>[{prefix}]</b></span> {msg}")
+                    f"<span style='color:{COLORS['primary']}'><b>[{html.escape(prefix)}]</b></span> "
+                    f"{html.escape(msg)}")
             else:
                 self.log_view.append(
-                    f"<span style='color:{COLORS['text_dim']}'>{msg}</span>")
+                    f"<span style='color:{COLORS['text_dim']}'>{html.escape(msg)}</span>")
         self.log_view.verticalScrollBar().setValue(
             self.log_view.verticalScrollBar().maximum())
 

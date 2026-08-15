@@ -117,6 +117,39 @@ def _split_large_chapters(
     return result
 
 
+def _build_chapter_ranges(level1: list[tuple[int, str, int]],
+                          total_pages: int) -> list[tuple[str, int, int]]:
+    """将一级书签转成 0-based 闭区间章节范围。
+
+    L3: 首个一级书签之前的页（封面/目录/版权页）作为独立前置章节保留，
+    避免被静默丢弃。
+    """
+    def _clamp(page_1based):
+        return max(1, min(page_1based, total_pages))
+
+    chapter_ranges = []
+    first_start_0 = _clamp(level1[0][2]) - 1
+    if first_start_0 > 0:
+        chapter_ranges.append(("封面与目录", 0, first_start_0 - 1))
+        logger.info(f"前置内容 (封面/目录) 页 1-{first_start_0} 单独成章")
+
+    for i in range(len(level1)):
+        title = level1[i][1]
+        start_0 = _clamp(level1[i][2]) - 1  # 1-based → 0-based, 钳制
+        if i + 1 < len(level1):
+            end_0 = _clamp(level1[i + 1][2]) - 2  # 到下一书签页之前
+        else:
+            end_0 = total_pages - 1  # 末章到文档末尾
+
+        if start_0 > end_0:
+            logger.warning(f"跳过空章节 '{title}' (页 {start_0 + 1} > {end_0 + 1})")
+            continue
+
+        chapter_ranges.append((title, start_0, end_0))
+
+    return chapter_ranges
+
+
 def split_pdf_by_bookmarks(pdf_path: str | Path,
                             bookmarks: list[tuple[int, str, int]],
                             total_pages: int,
@@ -156,25 +189,8 @@ def split_pdf_by_bookmarks(pdf_path: str | Path,
         logger.info("一级书签不足 2 个，不拆分 PDF")
         return [(title, pdf_path)]
 
-    # 钳制书签页码到有效范围
-    def _clamp(page_1based):
-        return max(1, min(page_1based, total_pages))
-
     # 1. 构建章节页范围（0-based 闭区间）
-    chapter_ranges = []
-    for i in range(len(level1)):
-        title = level1[i][1]
-        start_0 = _clamp(level1[i][2]) - 1  # 1-based → 0-based, 钳制
-        if i + 1 < len(level1):
-            end_0 = _clamp(level1[i + 1][2]) - 2  # 到下一书签页之前
-        else:
-            end_0 = total_pages - 1  # 末章到文档末尾
-
-        if start_0 > end_0:
-            logger.warning(f"跳过空章节 '{title}' (页 {start_0 + 1} > {end_0 + 1})")
-            continue
-
-        chapter_ranges.append((title, start_0, end_0))
+    chapter_ranges = _build_chapter_ranges(level1, total_pages)
 
     # 2. 大章二次拆分
     if max_chapter_pages > 0:

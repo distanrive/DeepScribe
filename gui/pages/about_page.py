@@ -3,13 +3,13 @@
 """
 from pathlib import Path
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import (
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QDesktopServices
+from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
     QPushButton, QScrollArea,
 )
-from PySide6.QtCore import QUrl
+from PyQt5.QtCore import QUrl
 
 from gui.styles import COLORS, install_hover_highlights
 
@@ -35,7 +35,7 @@ class AboutPage(QWidget):
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setFrameShape(QFrame.NoFrame)
 
         content = QWidget()
         layout = QVBoxLayout(content)
@@ -45,20 +45,20 @@ class AboutPage(QWidget):
         # 大标题
         title = QLabel("DeepScribe")
         title.setStyleSheet(f"""
-            font-size: 32px; font-weight: 800; color: {COLORS['primary']};
+            font-size: 20px; font-weight: 800; color: {COLORS['primary']};
             background: transparent;
         """)
         layout.addWidget(title)
 
         subtitle = QLabel("PDF 学术论文英文 → 中文 Markdown 翻译流水线")
         subtitle.setStyleSheet("""
-            font-size: 15px; padding-bottom: 4px; background: transparent;
+            font-size: 14px; padding-bottom: 4px; background: transparent;
         """)
         layout.addWidget(subtitle)
 
         # 分隔线
         sep = QFrame()
-        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setFrameShape(QFrame.HLine)
         sep.setStyleSheet("background: transparent;")
         sep.setFixedHeight(1)
         layout.addWidget(sep)
@@ -68,7 +68,7 @@ class AboutPage(QWidget):
         layout.addWidget(self._body(
             "• MinerU — PDF 解析与公式提取\n"
             "• DeepSeek API — 批量翻译（[BLK:N] 标记机制）\n"
-            "• PySide6 — 图形界面\n"
+            "• PyQt5 — 图形界面\n"
             "• SQLite — 断点续传缓存\n"
             "• PyMuPDF — PDF 书签提取与拆分"
         ))
@@ -93,7 +93,7 @@ class AboutPage(QWidget):
         layout.addWidget(self._section("项目地址"))
         gh_btn = QPushButton("🔗  github.com/distanrive/DeepScribe")
         gh_btn.setObjectName("linkBtn")
-        gh_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        gh_btn.setCursor(Qt.PointingHandCursor)
         gh_btn.setMinimumHeight(36)
         gh_btn.setMaximumWidth(340)
         gh_btn.clicked.connect(
@@ -104,8 +104,7 @@ class AboutPage(QWidget):
         # ---- 依赖 ----
         layout.addWidget(self._section("Python 依赖"))
         layout.addWidget(self._body(
-            "openai  ·  python-dotenv  ·  mineru  ·  PyMuPDF  ·  PySide6\n"
-            "qt-material"
+            "openai  ·  python-dotenv  ·  mineru  ·  PyMuPDF  ·  PyQt5"
         ))
 
         layout.addStretch()
@@ -113,7 +112,7 @@ class AboutPage(QWidget):
         # 版本
         ver = QLabel(f"DeepScribe {_read_version()}  |  GUI Edition")
         ver.setStyleSheet("font-size: 12px; background: transparent;")
-        ver.setAlignment(Qt.AlignmentFlag.AlignRight)
+        ver.setAlignment(Qt.AlignRight)
         layout.addWidget(ver)
 
         scroll.setWidget(content)
@@ -123,7 +122,7 @@ class AboutPage(QWidget):
     def _section(text: str) -> QLabel:
         lbl = QLabel(text)
         lbl.setStyleSheet("""
-            font-size: 15px; font-weight: 700;
+            font-size: 14px; font-weight: 700;
             padding-top: 6px; background: transparent;
         """)
         return lbl

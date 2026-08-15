@@ -75,6 +75,19 @@ def normalize_md(text: str) -> str:
 
 # ---------- token estimation & chunking ----------
 
+# 汉字范围（含扩展区，L10）：基本区 + 扩展 A + 兼容表意 + 扩展 B~F + 兼容补充
+_ZH_PAT = re.compile(
+    r'[一-鿿㐀-䶿豈-﫿'
+    r'\U00020000-\U0002A6DF'   # 扩展 B
+    r'\U0002A700-\U0002B73F'   # 扩展 C
+    r'\U0002B740-\U0002B81F'   # 扩展 D
+    r'\U0002B820-\U0002CEAF'   # 扩展 E
+    r'\U0002CEB0-\U0002EBEF'   # 扩展 F
+    r'\U0002F800-\U0002FA1F'   # 兼容补充
+    r']'
+)
+
+
 def estimate_tokens(text: str) -> int:
     """
     估算文本的 token 数量（基于 DeepSeek 官方比例）。
@@ -86,7 +99,7 @@ def estimate_tokens(text: str) -> int:
     实际 token 数以 API 返回的 usage 字段为准，此处仅用于分块决策。
     """
     en_chars = len(re.findall(r'[a-zA-Z]', text))
-    zh_chars = len(re.findall(r'[一-鿿㐀-䶿豈-﫿]', text))
+    zh_chars = len(_ZH_PAT.findall(text))
     other = len(text) - en_chars - zh_chars
     return int(en_chars * 0.3 + zh_chars * 0.6 + other * 0.25)
 
@@ -447,6 +460,17 @@ def normalize_output(text: str) -> str:
                 i += 1
             result.append(' '.join(merged))
     return '\n'.join(result)
+def _escape_cell(content: str) -> str:
+    """转义 Markdown 表格单元格内容，避免 `|` 与换行破坏表格列结构。
+
+    已转义的 `\\|`（如 LaTeX `\\Vert`、`\\vert`）不重复转义；换行替换为
+    `<br>`，保证单元格内容仍单行显示。
+    """
+    content = re.sub(r'(?<!\\)\|', r'\\|', content)
+    content = content.replace('\n', '<br>')
+    return content
+
+
 def html_tables_to_md(text: str) -> str:
     """将所有 HTML 表格转为 Markdown 表格。
        rowspan/colspan 单元格通过重复内容展开，确保公式能在 MD 中渲染。"""
@@ -475,12 +499,16 @@ def html_tables_to_md(text: str) -> str:
                 cells.append((ri, ci, rowspan, colspan, content.strip()))
                 ci += colspan
 
+        if not cells:
+            return html  # 空表 / 无单元格：保留原文 HTML，避免对空序列 max() 崩溃
+
         # 构建最大行列范围
         max_row = max(ri + rs for ri, _, rs, _, _ in cells)
         max_col = max(ci + cs for _, ci, _, cs, _ in cells)
         grid = [[''] * max_col for _ in range(max_row)]
 
         for ri, ci, rs, cs, content in cells:
+            content = _escape_cell(content)
             for dr in range(rs):
                 for dc in range(cs):
                     grid[ri + dr][ci + dc] = content
@@ -531,6 +559,17 @@ def dedup_adjacent_images(text: str) -> str:
     return '\n'.join(result)
 
 
+def _postprocess_md(text: str) -> str:
+    """输出侧后处理（串行/并行/分章共用）：
+    表格渲染修复 → HTML 表格转 MD → 归一化 → 相邻图片去重。
+    """
+    text = fix_table_rendering(text)
+    text = html_tables_to_md(text)
+    text = normalize_output(text)
+    text = dedup_adjacent_images(text)
+    return text
+
+
 # ---------- image processing ----------
 
 # 匹配 ![...](path) 和 <img src="path"/>
@@ -552,13 +591,16 @@ def _is_url(path: str) -> bool:
 
 
 def process_images(md_text: str, images_dir: Path, output_dir: Path,
-                   doc_stem: str, quiet: bool = False) -> tuple[str, Path]:
+                   doc_stem: str, quiet: bool = False,
+                   asset_suffix: str = "_zh") -> tuple[str, Path]:
     """
     处理 MD 中所有图片引用（![](...) 和 <img src="..."/>）：
     1. 按出现顺序去重，编号 image-1, image-2, ...
-    2. 从 images_dir 递归查找原图，复制到 {doc_stem}_zh.assets/
+    2. 从 images_dir 递归查找原图，复制到 {doc_stem}{asset_suffix}.assets/
     3. 替换 MD 中的引用为 Markdown ![]() 格式
     """
+    assets_name = f"{doc_stem}{asset_suffix}.assets"
+
     # 收集所有图片引用：(![](...) 格式)
     md_refs = [(m.group(1), m.group(2), m.span()) for m in _IMG_MD_PAT.finditer(md_text)]
     # <img> 格式 —— alt 为空，避免把路径当作文本
@@ -567,7 +609,7 @@ def process_images(md_text: str, images_dir: Path, output_dir: Path,
     all_refs = sorted(md_refs + html_refs, key=lambda x: x[2][0])
 
     if not all_refs:
-        assets_dir = output_dir / f"{doc_stem}_zh.assets"
+        assets_dir = output_dir / assets_name
         assets_dir.mkdir(parents=True, exist_ok=True)
         return md_text, assets_dir
 
@@ -581,12 +623,12 @@ def process_images(md_text: str, images_dir: Path, output_dir: Path,
             seen[old_name] = len(seen) + 1
 
     if not seen:
-        assets_dir = output_dir / f"{doc_stem}_zh.assets"
+        assets_dir = output_dir / assets_name
         assets_dir.mkdir(parents=True, exist_ok=True)
         return md_text, assets_dir
 
     # 复制并重命名
-    assets_dir = output_dir / f"{doc_stem}_zh.assets"
+    assets_dir = output_dir / assets_name
     assets_dir.mkdir(parents=True, exist_ok=True)
 
     # B1: 构建 {basename: Path} 索引（一次遍历，替代每张图的 rglob）
@@ -619,7 +661,7 @@ def process_images(md_text: str, images_dir: Path, output_dir: Path,
         old_name = Path(old_path).name
         mapped = renamed.get(old_name)
         if mapped:
-            new_ref = f"![{alt}]({doc_stem}_zh.assets/{mapped})"
+            new_ref = f"![{alt}]({assets_name}/{mapped})"
             result[start:end] = new_ref
 
     new_md = ''.join(result)
@@ -787,8 +829,21 @@ def translate_blocks(blocks: list[dict], db: TranslationDB,
         prev_pending = len(pending)
         pending = db.get_pending_paragraphs()
         if pending and len(pending) >= prev_pending:
-            logger.error("翻译循环未取得进展，中止以避免死循环")
-            break
+            # M2: 本轮无进展。原实现立即 break，导致 failed_attempts 永远到不了
+            # MAX_FAILED_ATTEMPTS，兜底分支不触发，剩余段落最终靠组装时
+            # trans_map.get(idx, content) 静默回退原文且无告警。
+            # 修复：只要仍有段落未达失败上限就继续重试（failed_attempts 会递增，
+            # 达上限时上方兜底分支会标记完成并告警）；全部达上限后理论上 pending
+            # 已清空，若仍剩余则兜底后中止，作为防死循环的最后防线。
+            if all(failed_attempts.get(idx, 0) >= MAX_FAILED_ATTEMPTS for idx, _ in pending):
+                logger.error("翻译循环未取得进展，剩余段落改用原文兜底（请人工检查译文）")
+                fallback = {idx: text for idx, text in pending}
+                db.mark_many_done(fallback)
+                trans_map.update(fallback)
+                for idx in fallback:
+                    logger.error(f"段落 #{idx} 翻译失败，已用原文兜底（请人工检查该段译文）")
+                break
+            # 未达上限 → 继续下一轮重试（while 循环自然重入）
 
     # 补充 DB 中已有的翻译 + 本次结果
     all_trans = db.get_all_translations()
@@ -797,16 +852,6 @@ def translate_blocks(blocks: list[dict], db: TranslationDB,
 
 
 # ---------- parallel translation helpers ----------
-
-def _cleanup_chapter_db(db_path: Path) -> None:
-    """删除章节翻译的临时 DB 文件（文件不存在或删除失败时静默）。"""
-    if not db_path.exists():
-        return
-    try:
-        db_path.unlink()
-    except OSError:
-        logger.warning(f"章节翻译 DB 清理失败: {db_path}")
-
 
 def _process_chapter_pdf(order: int, title: str, pdf_path: Path | None,
                           output_dir: Path, _stem: str,
@@ -860,7 +905,8 @@ def _process_chapter_pdf(order: int, title: str, pdf_path: Path | None,
         trans_map = translate_blocks(blocks, db, translator, label=title)
     finally:
         db.close()
-        _cleanup_chapter_db(db_path)
+        # M1: 保留章节 DB 用于断点续传。已完成章节重跑时直接复用缓存译文，
+        # 避免并行模式中断重跑后对已完成章节重复翻译、重复计费。
 
     zh_lines = []
     en_lines = []
@@ -1039,23 +1085,18 @@ def _process_pdf_parallel(output_dir: Path, pdf_path: Path, _stem: str,
         pass
 
     # 6. 后处理
-    zh_text = fix_table_rendering(zh_text)
-    en_text = fix_table_rendering(en_text)
-    zh_text = html_tables_to_md(zh_text)
-    en_text = html_tables_to_md(en_text)
-    zh_text = normalize_output(zh_text)
-    en_text = normalize_output(en_text)
-    zh_text = dedup_adjacent_images(zh_text)
-    en_text = dedup_adjacent_images(en_text)
+    zh_text = _postprocess_md(zh_text)
+    en_text = _postprocess_md(en_text)
 
     # 7. 分章输出 → PDF 所在目录
+    # L5: 分章文件应用与合并版一致的后处理，避免读者看到两个内容版本
     _part_dir = output_dir / "part"
     _part_dir.mkdir(parents=True, exist_ok=True)
     for cr in chapter_results:
         safe = re.sub(r'[\\/:*?"<>|]', '_', cr['title']).strip()
         part_path = _part_dir / f"{cr['order']:02d}_{safe}.md"
         with open(part_path, "w", encoding="utf-8") as pf:
-            pf.write(cr['zh_text'])
+            pf.write(_postprocess_md(cr['zh_text']))
     logger.info(f"分章输出: {len(chapter_results)} 章 → {_part_dir}")
 
     # 8. 警告 + 失败报告 → 输出到 PDF 所在目录
@@ -1086,14 +1127,185 @@ def _ensure_temp_dir() -> Path:
     return _TEMP_ROOT
 
 
+def _parse_pdf_to_md(pdf_path: Path, output_dir: Path, temp_dir: Path,
+                     _stem: str, force: bool, mineru_lock,
+                     progress_callback, asset_suffix: str = "_zh") -> tuple[str, Path]:
+    """串行 MinerU 解析 + 规范化 + 图片处理（串行翻译与仅解析共用）。
+
+    asset_suffix: 图片资产目录后缀，串行翻译用 "_zh"，仅解析用 "_parsed"。
+
+    Returns:
+        (md_text, assets_dir)
+    """
+    if progress_callback:
+        progress_callback(-1, "parsing", pdf_path.stem)
+    mineru_out = temp_dir / f"{_stem}_mineru"
+
+    # 1. MinerU 解析（复用缓存，除非 force）
+    md_path = mineru_out / _stem / "auto" / f"{_stem}.md"
+    hybrid_md_path = mineru_out / _stem / "hybrid_auto" / f"{_stem}.md"
+    if hybrid_md_path.exists():
+        md_path = hybrid_md_path
+    if force or not md_path.exists():
+        # GUI 跨进程 MinerU 全局并发限制（GPU 显存保护），无锁时退化为 nullcontext
+        with (mineru_lock() if mineru_lock else nullcontext()):
+            md_path, images_dir = run_mineru(pdf_path, mineru_out, backend=MINERU_BACKEND)
+    else:
+        images_dir = md_path.parent / "images"
+        if not images_dir.is_dir():
+            images_dir = md_path.parent
+        logger.info(f"使用已有 MinerU 输出: {md_path}")
+
+    # 2. 读取 + 规范化
+    with open(md_path, "r", encoding="utf-8") as f:
+        raw_md = f.read()
+    logger.info(f"MD 文件大小: {len(raw_md):,} 字符")
+    raw_md = normalize_md(raw_md)
+
+    # 3. 图片处理 → 输出到 PDF 所在目录
+    new_md, assets_dir = process_images(raw_md, images_dir, output_dir,
+                                        pdf_path.stem, asset_suffix=asset_suffix)
+    return new_md, assets_dir
+
+
+def _parse_only(pdf_path: Path, output_dir: Path, temp_dir: Path,
+                _stem: str, force: bool, mineru_lock,
+                progress_callback, parallel: bool) -> None:
+    """仅解析：MinerU → 规范化 → 图片处理 → 输出 {stem}_parsed.md，跳过翻译。
+
+    有书签且启用并行时，按章节拆分并用 MAX_PARALLEL_MINERU 并发解析；
+    否则串行解析整篇。
+    """
+    if parallel:
+        bookmarks, total_pages = extract_bookmarks(pdf_path)
+        if bookmarks:
+            try:
+                _parse_only_parallel(pdf_path, output_dir, temp_dir, _stem,
+                                     bookmarks, total_pages, mineru_lock,
+                                     progress_callback)
+                return
+            except Exception as e:
+                logger.warning(f"并行解析失败 ({e})，退回串行解析")
+        else:
+            logger.info("PDF 无书签，退回串行解析")
+
+    new_md, _ = _parse_pdf_to_md(pdf_path, output_dir, temp_dir, _stem,
+                                  force, mineru_lock, progress_callback,
+                                  asset_suffix="_parsed")
+    out_path = output_dir / f"{pdf_path.stem}_parsed.md"
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(new_md)
+    logger.info(f"仅解析完成: {out_path}")
+
+
+def _parse_only_parallel(pdf_path: Path, output_dir: Path, temp_dir: Path,
+                         _stem: str, bookmarks, total_pages: int,
+                         mineru_lock, progress_callback) -> None:
+    """仅解析的并行模式：按书签拆分 PDF，各章并发 MinerU（MAX_PARALLEL_MINERU），
+    合并为单个 {stem}_parsed.md + {stem}_parsed.assets/。"""
+    sub_pdfs_dir = temp_dir / f"{_stem}_parts"
+    sub_pdfs = split_pdf_by_bookmarks(pdf_path, bookmarks, total_pages,
+                                       sub_pdfs_dir, _stem,
+                                       max_chapter_pages=MAX_CHAPTER_PAGES)
+    if len(sub_pdfs) < 2:
+        raise ValueError("无法拆分为多章节")
+
+    mineru_sem = Semaphore(MAX_PARALLEL_MINERU)
+    _part_dir = temp_dir / "part"
+    _part_dir.mkdir(parents=True, exist_ok=True)
+
+    results = [None] * len(sub_pdfs)
+    failures = []
+
+    def _do_chapter(i: int, title: str, sub_pdf_path: Path) -> tuple[int, str, str]:
+        if progress_callback:
+            progress_callback(i, "parsing", title)
+        with mineru_sem:
+            with (mineru_lock() if mineru_lock else nullcontext()):
+                _out = temp_dir / f"{_stem}_ch{i}_mineru"
+                _md_path, _images_dir = run_mineru(sub_pdf_path, _out, backend=MINERU_BACKEND)
+                with open(_md_path, "r", encoding="utf-8") as _f:
+                    _md_text = _f.read()
+                _md_text = normalize_md(_md_text)
+                # 每章独立图片处理到 temp part（后缀 _parsed）
+                _md_text, _ = process_images(
+                    _md_text, _images_dir, _part_dir,
+                    f"{_stem}_ch{i}", quiet=True, asset_suffix="_parsed")
+        if progress_callback:
+            progress_callback(i, "done", title)
+        return i, title, _md_text
+
+    logger.info(f"并行仅解析: {len(sub_pdfs)} 章, MinerU并发={MAX_PARALLEL_MINERU}")
+    for i, (title, _) in enumerate(sub_pdfs):
+        if progress_callback:
+            progress_callback(i, "queued", title)
+
+    with ThreadPoolExecutor(max_workers=MAX_PARALLEL_WORKERS) as executor:
+        _futures = {executor.submit(_do_chapter, i, t, p): (i, t)
+                    for i, (t, p) in enumerate(sub_pdfs)}
+        for f in as_completed(_futures):
+            i, title = _futures[f]
+            try:
+                _i, _title, md_text = f.result()
+                results[_i] = md_text
+            except Exception as e:
+                logger.error(f"第 {i + 1} 章 [{title}] 解析失败: {e}")
+                if progress_callback:
+                    progress_callback(i, "error", title)
+                results[i] = f"<!-- ⚠️ 本章解析失败 -->\n{title}"
+                failures.append({"kind": "章节", "name": title, "error": str(e)})
+
+    merged = "\n\n".join(r for r in results if r is not None)
+
+    # 统一图片处理（与并行翻译合并逻辑一致）
+    _merged_img_dir = temp_dir / f"{_stem}_merged_img"
+    _merged_img_dir.mkdir(parents=True, exist_ok=True)
+    for i in range(len(sub_pdfs)):
+        _ch_prefix = f"{_stem}_ch{i}_parsed.assets"
+        _ch_assets = _part_dir / _ch_prefix
+        if _ch_assets.is_dir():
+            for _img in _ch_assets.iterdir():
+                if _img.is_file():
+                    shutil.copy2(_img, _merged_img_dir / f"{i:02d}_{_img.name}")
+        _esc = re.escape(_ch_prefix)
+        _pat = re.compile(rf'(\(|<img\b[^>]*\bsrc=["\'])\s*{_esc}/([^)"\']+)')
+        merged = _pat.sub(rf'\g<1>{i:02d}_\g<2>', merged)
+
+    if any(_merged_img_dir.iterdir()):
+        merged, _ = process_images(merged, _merged_img_dir, output_dir,
+                                   pdf_path.stem, asset_suffix="_parsed")
+    else:
+        (output_dir / f"{pdf_path.stem}_parsed.assets").mkdir(parents=True, exist_ok=True)
+
+    # 清理 temp 中间文件
+    for _d in (_merged_img_dir, sub_pdfs_dir, _part_dir):
+        try:
+            shutil.rmtree(_d)
+        except OSError:
+            pass
+    for i in range(len(sub_pdfs)):
+        try:
+            shutil.rmtree(temp_dir / f"{_stem}_ch{i}_mineru")
+        except OSError:
+            pass
+
+    out_path = output_dir / f"{pdf_path.stem}_parsed.md"
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(merged)
+    write_failure_report(output_dir, pdf_path.stem, failures)
+    logger.info(f"并行仅解析完成: {out_path}")
+
+
 def process_pdf(pdf_path: Path, output_dir: Path | None = None,
                 force: bool = False, parallel: bool = None,
                 temp_dir: Path | None = None,
-                progress_callback=None, mineru_lock=None):
+                progress_callback=None, mineru_lock=None,
+                parse_only: bool = False):
     """处理单个 PDF。progress_callback(chapter_order, title) 用于并行模式的章节通知。
 
     mineru_lock: 可选，调用后返回上下文管理器的可调用对象，用于在 MinerU
                  运行期间加全局并发锁（GUI 跨进程 GPU 显存保护）。
+    parse_only: 仅运行 MinerU 解析并输出 {stem}_parsed.md，跳过翻译（省 API 费用）。
     """
     if parallel is None:
         parallel = ENABLE_PARALLEL
@@ -1103,9 +1315,16 @@ def process_pdf(pdf_path: Path, output_dir: Path | None = None,
         temp_dir = _ensure_temp_dir()
 
     pdf_stem = pdf_path.stem
-    _stem = "_" + hashlib.sha256(pdf_stem.encode()).hexdigest()[:12]
+    # 短名哈希输入含完整路径：避免不同目录下同名 PDF 共用同一 DB / MinerU 输出目录
+    _stem = "_" + hashlib.sha256(str(pdf_path.resolve()).encode()).hexdigest()[:12]
     logger.info(f"短名 {_stem} ← {pdf_stem}")
     logger.info(f"输出目录: {output_dir}")
+
+    # --- 仅解析模式：只跑 MinerU + 规范化 + 图片处理，跳过翻译 ---
+    if parse_only:
+        _parse_only(pdf_path, output_dir, temp_dir, _stem, force,
+                    mineru_lock, progress_callback, parallel)
+        return
 
     # --- 并行模式检测（先于完整 PDF 的 MinerU，避免浪费）---
     if parallel:
@@ -1126,35 +1345,8 @@ def process_pdf(pdf_path: Path, output_dir: Path | None = None,
             logger.info("PDF 无书签，退回串行模式")
 
     # --- 串行模式 ---
-    if progress_callback:
-        progress_callback(-1, "parsing", pdf_stem)
-    mineru_out = temp_dir / f"{_stem}_mineru"
-
-    # 1. MinerU 解析
-    md_path = mineru_out / _stem / "auto" / f"{_stem}.md"
-    hybrid_md_path = mineru_out / _stem / "hybrid_auto" / f"{_stem}.md"
-    if hybrid_md_path.exists():
-        md_path = hybrid_md_path
-    if force or not md_path.exists():
-        # GUI 跨进程 MinerU 全局并发限制（GPU 显存保护），无锁时退化为 nullcontext
-        with (mineru_lock() if mineru_lock else nullcontext()):
-            md_path, images_dir = run_mineru(pdf_path, mineru_out, backend=MINERU_BACKEND)
-    else:
-        images_dir = md_path.parent / "images"
-        if not images_dir.is_dir():
-            images_dir = md_path.parent
-        logger.info(f"使用已有 MinerU 输出: {md_path}")
-
-    # 2. 读取 MD
-    with open(md_path, "r", encoding="utf-8") as f:
-        raw_md = f.read()
-    logger.info(f"MD 文件大小: {len(raw_md):,} 字符")
-
-    # 2.5 规范化
-    raw_md = normalize_md(raw_md)
-
-    # 3. 图片处理 → 输出到 PDF 所在目录
-    new_md, assets_dir = process_images(raw_md, images_dir, output_dir, pdf_stem)
+    new_md, assets_dir = _parse_pdf_to_md(pdf_path, output_dir, temp_dir, _stem,
+                                           force, mineru_lock, progress_callback)
 
     # 4. 切分
     blocks = split_md_blocks(new_md)
@@ -1207,14 +1399,8 @@ def process_pdf(pdf_path: Path, output_dir: Path | None = None,
     write_warnings_file(output_dir, pdf_stem, g2_warnings + zh_warnings)
 
     # 后处理
-    zh_text = fix_table_rendering(zh_text)
-    en_text = fix_table_rendering(en_text)
-    zh_text = html_tables_to_md(zh_text)
-    en_text = html_tables_to_md(en_text)
-    zh_text = normalize_output(zh_text)
-    en_text = normalize_output(en_text)
-    zh_text = dedup_adjacent_images(zh_text)
-    en_text = dedup_adjacent_images(en_text)
+    zh_text = _postprocess_md(zh_text)
+    en_text = _postprocess_md(en_text)
 
     with open(zh_md_path, "w", encoding="utf-8") as f:
         f.write(zh_text)
@@ -1242,6 +1428,8 @@ def main():
                         help="启用并行翻译模式（需 PDF 含多级书签）")
     parser.add_argument("--no-parallel", dest="parallel", action="store_false",
                         help="禁用并行翻译模式（强制串行）")
+    parser.add_argument("--parse-only", action="store_true",
+                        help="仅运行 MinerU 解析并输出 {stem}_parsed.md，跳过翻译")
     args = parser.parse_args()
 
     input_path = Path(args.input)
@@ -1273,11 +1461,12 @@ def main():
         logger.info(f"--- 开始处理: {pdf} ---")
         file_out.mkdir(parents=True, exist_ok=True)
         try:
-            process_pdf(pdf, file_out, args.force, parallel=args.parallel)
+            process_pdf(pdf, file_out, args.force, parallel=args.parallel,
+                        parse_only=args.parse_only)
         except Exception as e:
             logger.error(f"处理失败: {pdf.name}: {e}", exc_info=True)
-            _stem = "_" + hashlib.sha256(pdf.stem.encode()).hexdigest()[:12]
-            write_failure_report(file_out, _stem,
+            # L4: 失败报告命名与成功/并行路径统一用 pdf.stem（此前用短名 _xxx 不一致）
+            write_failure_report(file_out, pdf.stem,
                                  [{"kind": "文件", "name": pdf.name, "error": str(e)}])
             failed_files.append((str(pdf), str(e)))
 

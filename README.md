@@ -17,12 +17,13 @@
 - **公式全解析** — MinerU 高精度提取行内/显示 LaTeX 公式，翻译时自动保护不译；G2 完整性校验检测 LLM 损坏的公式并回填原文
 - **图片全保留** — 自动提取 PDF 内嵌图片，去重重编号，复制到独立 assets 目录；支持外部 URL 图片原样保留
 - **标题层级保留** — 智能识别 Markdown 标题编号层级（1, 1.1, 1.1.1），自动修正 `#` 深度；检测字典序倒退、非标准编号，误判标题降为正文
-- **按页拆分 PDF** — 书签页码精确切分，每章独立送 MinerU；**大章自动二次拆分**（超过阈值用二级书签切子章），避免单章瓶颈
+- **按页拆分 PDF** — 书签页码精确切分，每章独立送 MinerU；**大章自动二次拆分**（超过阈值用二级书签切子章），避免单章瓶颈；首个书签前的封面/目录自动作为前置章节保留
 - **解析翻译异步并行** — MinerU 解析与 DeepSeek 翻译流水线并行，Semaphore 控制 GPU 显存，翻译不限并发
 - **批量翻译** — `[BLK:N]` 标记机制，Token 感知分块（回溯搜索语义断点），自适应 marker 保留率
 - **断点续传** — SQLite 缓存译文（UPSERT，内容变化自动重置），中断重跑不重复翻译
 - **表格完整还原** — HTML 表格自动转 Markdown，rowspan/colspan 展开，表格内图片行内化
 - **批处理** — 递归扫描输入目录，镜像输出结构，单文件失败不中止批次
+- **仅解析模式** — 只跑 MinerU 解析并输出 `{stem}_parsed.md`，跳过翻译（零 API 费用）；启用并行 + 有书签时按章节并发解析
 
 ## 环境配置
 
@@ -31,10 +32,10 @@
 ```bash
 conda create -n deepscribe python=3.10
 conda activate deepscribe
-pip install "mineru[all]" openai python-dotenv PyMuPDF PySide6 qt-material
+pip install "mineru[all]" openai python-dotenv PyMuPDF PyQt5
 ```
 
-其中 PySide6 qt-material 仅GUI使用
+其中 PyQt5 仅 GUI 使用（PyQt5 为 GPL 许可，故本项目采用 GPL-3.0）
 
 ### 2. CUDA 版 PyTorch（GPU 用户）
 
@@ -85,6 +86,7 @@ python main.py -i ./input -o ./output      # 串行（默认）
 python main.py -i ./input --parallel       # 并行（需 PDF 含多级书签）
 python main.py -i ./input --no-parallel    # 强制串行
 python main.py -i ./input --force          # 强制重新 MinerU
+python main.py -i ./input --parse-only     # 仅解析（跳过翻译，输出 _parsed.md）
 ```
 
 ## GUI
@@ -97,15 +99,15 @@ python main.py -i ./input --force          # 强制重新 MinerU
 
 ```bash
 python -m gui.main                    # 命令行启动
-run_gui.bat                           # 双击启动（无控制台窗口）
+run_gui_example.bat                  # 复制为 run_gui.bat 后双击启动（无控制台窗口）
 ```
 
-`run_gui.bat` 内容示例（将路径改为你的 conda 环境）：
+`run_gui_example.bat` 内容（`%USERPROFILE%` 自动解析当前用户，无需改用户名；`run_gui.bat` 含个人路径，已加入 .gitignore）：
 
 ```bat
 @echo off
 cd /d "%~dp0"
-start "" "C:\Users\YH\.conda\envs\deepscribe\pythonw.exe" -m gui.main
+start "" "%USERPROFILE%\.conda\envs\deepscribe\pythonw.exe" -m gui.main
 ```
 
 要点：
@@ -116,6 +118,7 @@ start "" "C:\Users\YH\.conda\envs\deepscribe\pythonw.exe" -m gui.main
 - 并行模式下，文件列表显示各章子行（等待中 → 解析中 → 翻译中 → 完成/失败），父行统一显示"等待中/工作中/完成/部分失败"。
 - "停止" 会终止该文件的子进程树（`taskkill /T /F`，包括 MinerU），真正中断任务。
 - 勾选 **"强制重新解析 (MinerU)"** 可忽略缓存重新解析（切换解析后端后需要）。
+- 勾选 **"仅解析"** 只跑 MinerU 解析并输出 `{stem}_parsed.md`，跳过翻译（省 API 费用）；启用并行 + 有书签时按章节并发解析。
 - 多文件同时处理时，MinerU 受全局并发限制（`MAX_PARALLEL_MINERU`，默认 1），避免 8 GB 显卡显存 OOM。
 
 ## 配置项
@@ -212,7 +215,7 @@ DeepScribe/
 ├── db.py                # SQLite 断点续传缓存
 ├── bookmark_utils.py    # PDF 书签提取 + 按页拆分
 ├── utils.py             # logging
-├── gui/                 # 图形界面（PySide6）
+├── gui/                 # 图形界面（PyQt5）
 │   ├── main.py          #   GUI 入口
 │   ├── main_window.py   #   侧边栏导航 + 页面切换
 │   ├── workers.py       #   QThread 子进程管理
@@ -222,10 +225,10 @@ DeepScribe/
 │   ├── styles.py        #   自定义 CSS
 │   └── pages/           #   工作 / 配置 / 关于
 ├── setup_env.bat        # 一键配置 conda 环境
-├── run_gui.bat          # GUI 启动脚本（无控制台窗口）
+├── run_gui_example.bat # GUI 启动脚本示例（复制为 run_gui.bat，已 gitignore）
 ├── config.json          # GUI 配置文件（自动生成）
 ├── .env.example         # 环境变量模板
-├── tests/               # 单元测试 (80 用例)
+├── tests/               # 单元测试 (105 用例)
 ├── input/               # 待翻译 PDF
 └── output/              # 输出目录
 ```
@@ -233,10 +236,10 @@ DeepScribe/
 ## 测试
 
 ```bash
-python -m unittest discover -s tests -p "test_*.py" -v   # 80 用例
+python -m unittest discover -s tests -p "test_*.py" -v   # 105 用例
 python -m unittest tests.test_headings -v                # 单模块
 ```
 
 ## License
 
-MIT。依赖 [MinerU](https://github.com/opendatalab/MinerU)（Apache 2.0）。
+GPL-3.0（因依赖 GPL 许可的 PyQt5）。其余依赖见 [MinerU](https://github.com/opendatalab/MinerU)（Apache 2.0）。

@@ -10,16 +10,23 @@ _project_root = Path(__file__).resolve().parent.parent
 if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
-from PySide6.QtWidgets import QApplication
-from PySide6.QtCore import Qt
+from PyQt5.QtWidgets import QApplication
+from PyQt5.QtGui import QFont
+from PyQt5.QtCore import Qt
 
-from qt_material import apply_stylesheet
-
-from gui.styles import CUSTOM_STYLESHEET
+from gui.styles import (
+    CUSTOM_STYLESHEET,
+    spin_arrow_stylesheet,
+    check_indicator_stylesheet,
+)
 from gui.main_window import MainWindow
 
 
 def main():
+    # PyQt5(Qt5) 默认不启用高分屏缩放，须在 QApplication 创建前设置；
+    # 否则迁移自 PySide6(Qt6) 后界面在高分屏上会模糊。
+    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+    QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
@@ -28,17 +35,17 @@ def main():
     app.setApplicationName("DeepScribe")
     app.setOrganizationName("DeepScribe")
 
-    # qt-material 深色主题 + 自定义主色
-    extra = {
-        "primary_color": "#6366f1",
-        "primary_light_color": "#818cf8",
-        "secondary_color": "#4b5563",
-        "secondary_light_color": "#6b7280",
-    }
-    apply_stylesheet(app, theme="dark_blue.xml", extra=extra)
+    # 全局字体：黑体（SimHei），未显式设 font-size 的控件统一走此基准
+    app.setFont(QFont("SimHei", 10))
 
-    # 叠加：修背景色 + 自定义控件（侧边栏/拖放区等）
-    app.setStyleSheet(app.styleSheet() + CUSTOM_STYLESHEET)
+    # Fusion 风格 + 自写 CUSTOM_STYLESHEET（不再依赖 qt-material）。
+    # spin_arrow / check_indicator 为运行期生成的箭头/勾/圆点 PNG 图标 QSS
+    app.setStyle("Fusion")
+    app.setStyleSheet(
+        CUSTOM_STYLESHEET
+        + spin_arrow_stylesheet()
+        + check_indicator_stylesheet()
+    )
 
     window = MainWindow()
     window.show()

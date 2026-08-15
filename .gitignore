@@ -6,3 +6,4 @@ oldversion/
 .env
 CLAUDE.md
 config.json
+run_gui.bat

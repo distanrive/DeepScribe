@@ -19,7 +19,7 @@ import time
 import traceback
 from pathlib import Path
 
-from PySide6.QtCore import QThread, Signal, QObject
+from PyQt5.QtCore import QThread, pyqtSignal, QObject
 
 # 项目根（子进程 cwd / PYTHONPATH）
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -29,21 +29,22 @@ _PROGRESS_PREFIX = "@@DS_PROGRESS@@ "
 
 
 class Signals(QObject):
-    file_status = Signal(str, str, object)
-    part_status = Signal(str, int, str, object)
-    log = Signal(str, str)
-    finished = Signal(str, bool, str)
+    file_status = pyqtSignal(str, str, object)
+    part_status = pyqtSignal(str, int, str, object)
+    log = pyqtSignal(str, str)
+    finished = pyqtSignal(str, bool, str)
 
 
 class ProcessWorker(QThread):
     """单文件处理线程：以子进程运行流水线。"""
 
     def __init__(self, pdf_path: Path, env: dict[str, str],
-                 force: bool = False, parent=None):
+                 force: bool = False, parse_only: bool = False, parent=None):
         super().__init__(parent)
         self.pdf_path = Path(pdf_path)
         self.env = env
         self.force = force
+        self.parse_only = parse_only
         self.signals = Signals()
         self._cancel = threading.Event()
         self._proc: subprocess.Popen | None = None
@@ -113,6 +114,8 @@ class ProcessWorker(QThread):
             cmd = [sys.executable, "-m", "gui._runner", fp, str(self.pdf_path.parent)]
             if self.force:
                 cmd.append("--force")
+            if self.parse_only:
+                cmd.append("--parse-only")
 
             self.signals.file_status.emit(fp, "status", "parsing")
             self.signals.log.emit(fp, f"开始处理: {self.pdf_path.name}")

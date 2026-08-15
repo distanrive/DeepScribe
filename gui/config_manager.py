@@ -128,10 +128,13 @@ class ConfigManager:
         if self._path.exists():
             try:
                 with open(self._path, "r", encoding="utf-8") as f:
-                    self._data = json.load(f)
-                # 补齐缺失的键
-                self._ensure_defaults()
-                return
+                    data = json.load(f)
+                # L1: 根节点必须是 dict；被手改为 list/str 等视为损坏，重建默认
+                if isinstance(data, dict):
+                    self._data = data
+                    # 补齐缺失的键
+                    self._ensure_defaults()
+                    return
             except (json.JSONDecodeError, OSError):
                 pass  # 损坏 → 重建
         self._data = self._deep_copy_defaults()
@@ -163,6 +166,11 @@ class ConfigManager:
         with open(self._path, "w", encoding="utf-8") as f:
             json.dump(self._data, f, indent=2, ensure_ascii=False)
 
+    def restore_defaults(self) -> None:
+        """恢复为代码内嵌的默认配置并立即保存（供「恢复默认设置」按钮调用）。"""
+        self._data = self._deep_copy_defaults()
+        self.save()
+
     # ---- API Key（透明加解密）----
     def get_api_key(self) -> str:
         encrypted = self._data.get("api", {}).get("api_key", "")
@@ -170,7 +178,9 @@ class ConfigManager:
             return ""
         try:
             return _dpapi_decrypt(encrypted)
-        except OSError:
+        except (OSError, ValueError, AttributeError):
+            # L2: bytes.fromhex 的 ValueError（手改密文）与
+            #     非 Windows 的 ctypes.windll AttributeError 一并兜底
             return ""
 
     def set_api_key(self, plaintext: str) -> None:
@@ -193,7 +203,7 @@ class ConfigManager:
         try:
             _dpapi_decrypt(encrypted)
             return True, ""
-        except OSError as e:
+        except (OSError, ValueError, AttributeError) as e:
             return False, f"无法解密已保存的 API Key：{e}"
 
     # ---- 通用 get / set ----

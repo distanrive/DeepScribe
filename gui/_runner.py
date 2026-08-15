@@ -46,6 +46,7 @@ def main():
     pdf_path = Path(sys.argv[1])
     output_dir = Path(sys.argv[2]) if len(sys.argv) > 2 else pdf_path.parent
     force = "--force" in sys.argv
+    parse_only = "--parse-only" in sys.argv
 
     parallel = os.environ.get("ENABLE_PARALLEL", "false").lower() in ("true", "1", "yes")
 
@@ -56,6 +57,7 @@ def main():
         parallel=parallel,
         progress_callback=_progress_callback,
         mineru_lock=_make_mineru_lock(),
+        parse_only=parse_only,
     )
 
 

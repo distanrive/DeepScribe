@@ -45,20 +45,22 @@ class TestTranslateBlocks(unittest.TestCase):
         self.assertEqual(res, {0: "译文0", 1: "译文1"})
         self.assertEqual(self.db.get_pending_paragraphs(), [])
 
-    def test_partial_failure_stays_pending(self):
+    def test_persistent_failure_falls_back_after_retries(self):
+        # M2: 单个段落持续失败时，重试达 MAX_FAILED_ATTEMPTS 上限后用原文兜底
+        # 并标记完成、告警（不再静默留 pending 导致重跑无限重试）。
         res = M.translate_blocks(self._blocks("a", "bad", "c"),
                                  self.db, FakeTranslator(fail=(1,)))
-        self.assertEqual(res, {0: "译文0", 2: "译文2"})
-        self.assertNotIn(1, res)
-        # 失败段不落库，保持未完成（重跑会重试）
-        self.assertEqual(self.db.get_pending_paragraphs(), [(1, "bad")])
+        self.assertEqual(res, {0: "译文0", 1: "bad", 2: "译文2"})
+        self.assertEqual(self.db.get_pending_paragraphs(), [])
 
-    def test_full_failure_nothing_cached(self):
+    def test_full_failure_falls_back_with_warning(self):
+        # M2: API 整体故障时，不再静默回退原文，而是重试达上限后
+        # 用原文兜底 + 标记完成（告警见日志），保证「遗漏段落有人工检查提示」。
         res = M.translate_blocks(self._blocks("a", "b", "c"),
                                  self.db, FakeTranslator(always_fail=True))
-        self.assertEqual(res, {})
-        self.assertEqual(self.db.get_all_translations(), {})
-        self.assertEqual(len(self.db.get_pending_paragraphs()), 3)
+        self.assertEqual(res, {0: "a", 1: "b", 2: "c"})
+        self.assertEqual(self.db.get_all_translations(), {0: "a", 1: "b", 2: "c"})
+        self.assertEqual(self.db.get_pending_paragraphs(), [])
 
     def test_max_failed_attempts_forces_fallback(self):
         old = M.MAX_FAILED_ATTEMPTS

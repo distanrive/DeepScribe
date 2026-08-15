@@ -35,7 +35,8 @@ def run_mineru(pdf_path: Path, output_dir: Path, backend: str = "pipeline") -> t
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # 始终用短名副本：SHA256 前 12 位 hex，~15 字符，远低于 MAX_PATH
-    short_stem = "_" + hashlib.sha256(pdf_path.stem.encode()).hexdigest()[:12]
+    # 哈希输入含完整路径：不同目录下同名 PDF 互不踩踏临时副本 / 输出目录
+    short_stem = "_" + hashlib.sha256(str(pdf_path.resolve()).encode()).hexdigest()[:12]
     temp_pdf = output_dir / f"{short_stem}.pdf"
     shutil.copy2(pdf_path, temp_pdf)
     logger.info(f"临时副本: {temp_pdf}  ← {pdf_path}")

@@ -12,6 +12,10 @@ import msvcrt
 import time
 from pathlib import Path
 
+from utils import setup_logger
+
+logger = setup_logger(__name__)
+
 
 class _Slot:
     """已占用的槽位。退出 with 块或 release() 时释放锁。"""
@@ -45,12 +49,22 @@ class MineruSlotPool:
 
     def acquire(self, poll: float = 0.5):
         """阻塞直到获得一个槽位，返回 _Slot（可用作上下文管理器）。"""
+        waited = 0.0
+        warned = False
         while True:
             for i in range(self._count):
                 slot = self._try_lock(i)
                 if slot is not None:
+                    if waited >= 60:
+                        logger.warning(f"等待 MinerU 槽位 {waited:.0f}s 后才获得")
                     return slot
             time.sleep(poll)
+            waited += poll
+            # L12: 等待超时告警，便于排查并发受限或残留进程未释放锁
+            if waited >= 60 and not warned:
+                logger.warning(
+                    "等待 MinerU 槽位超过 60s，可能并发受限或残留进程未释放锁")
+                warned = True
 
     def _try_lock(self, i: int):
         path = self._slots_dir / f"slot{i}.lock"

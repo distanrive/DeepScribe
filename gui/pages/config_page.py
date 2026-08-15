@@ -1,8 +1,8 @@
 """
 配置页面：API 设置 / 解析设置 / 并行翻译 / 高级配置
 """
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (
+from PyQt5.QtCore import Qt
+from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QComboBox, QSpinBox, QDoubleSpinBox,
     QCheckBox, QGroupBox, QScrollArea, QFrame,
@@ -34,7 +34,7 @@ class ConfigPage(QWidget):
     def _setup_ui(self):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setFrameShape(QFrame.NoFrame)
         scroll.setStyleSheet("QScrollArea { border: none; }")
 
         container = QWidget()
@@ -45,7 +45,7 @@ class ConfigPage(QWidget):
         # 页面标题
         title = QLabel("配置")
         title.setStyleSheet("""
-            font-size: 20px; font-weight: 800;
+            font-size: 18px; font-weight: 800;
             padding-bottom: 8px; background: transparent;
         """)
         layout.addWidget(title)
@@ -58,7 +58,7 @@ class ConfigPage(QWidget):
 
         # ---- 按钮行（居中）----
         btn_row = QHBoxLayout()
-        btn_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        btn_row.setAlignment(Qt.AlignCenter)
         btn_row.setSpacing(16)
 
         self._restore_btn = QPushButton("↻  恢复默认设置")
@@ -94,7 +94,7 @@ class ConfigPage(QWidget):
         row1 = QHBoxLayout()
         row1.addWidget(self._label("API Key"))
         self._api_key_field = QLineEdit()
-        self._api_key_field.setEchoMode(QLineEdit.EchoMode.Password)
+        self._api_key_field.setEchoMode(QLineEdit.Password)
         self._api_key_field.setPlaceholderText("输入 DeepSeek API Key")
         self._api_key_field.setMinimumWidth(360)
         row1.addWidget(self._api_key_field, 1)
@@ -109,6 +109,8 @@ class ConfigPage(QWidget):
         row2.addWidget(self._label("模型"))
         self._model_combo = QComboBox()
         self._model_combo.addItems(["deepseek-v4-pro", "deepseek-v4-flash"])
+        # L7: 可编辑——config.json 中其他模型名能正确显示，且不会被下拉默认值静默覆盖
+        self._model_combo.setEditable(True)
         row2.addWidget(self._model_combo, 1)
         row2.addStretch(2)
         layout.addLayout(row2)
@@ -337,15 +339,14 @@ class ConfigPage(QWidget):
         reply = QMessageBox.question(
             self, "确认恢复",
             "将放弃当前所有配置，恢复为默认设置。\n\n确定要继续吗？",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
         )
-        if reply != QMessageBox.StandardButton.Yes:
+        if reply != QMessageBox.Yes:
             return
 
-        # 用默认值覆写配置数据
-        self._cfg._data = self._cfg._deep_copy_defaults()
-        self._cfg.save()
+        # 用公开方法恢复默认（不再直接触碰 ConfigManager 私有成员）
+        self._cfg.restore_defaults()
         self._load_config()
         QMessageBox.information(self, "已恢复", "配置已恢复为默认值并保存。")
 

@@ -1,12 +1,12 @@
 """
 DeepScribe GUI — 主窗口。
 侧边栏导航 + 页面区域。
-主题由 qt-material (dark_blue.xml) + CUSTOM_STYLESHEET 提供。
+主题由 CUSTOM_STYLESHEET 提供。
 """
 from pathlib import Path
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (
+from PyQt5.QtCore import Qt
+from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QLabel, QPushButton, QStackedWidget, QSizePolicy, QFrame,
 )
@@ -79,12 +79,12 @@ class MainWindow(QMainWindow):
 
         # 标题（Expanding 使标签占满侧边栏宽度，AlignCenter 才真正把文字居中）
         title = QLabel("DeepScribe")
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        title.setAlignment(Qt.AlignCenter)
+        title.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         title.setStyleSheet(f"""
             QLabel {{
                 color: {COLORS["primary"]};
-                font-size: 22px;
+                font-size: 20px;
                 font-weight: 800;
                 padding: 8px 12px 16px 12px;
                 background: transparent;
@@ -94,7 +94,7 @@ class MainWindow(QMainWindow):
 
         # 分隔线
         sep = QFrame()
-        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setFrameShape(QFrame.HLine)
         sep.setStyleSheet("color: rgba(255,255,255,0.08); background: transparent;")
         sep.setFixedHeight(1)
         layout.addWidget(sep)
@@ -105,7 +105,7 @@ class MainWindow(QMainWindow):
             btn = QPushButton(text)
             btn.setObjectName("navBtn")
             btn.setCheckable(True)
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setCursor(Qt.PointingHandCursor)
             btn.setMinimumHeight(42)
             btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             btn.clicked.connect(lambda checked, k=key: self._show_page(k))
@@ -119,7 +119,7 @@ class MainWindow(QMainWindow):
         ver.setStyleSheet("""
             QLabel {
                 color: rgba(255,255,255,0.25);
-                font-size: 11px;
+                font-size: 12px;
                 padding: 8px 12px;
                 background: transparent;
             }

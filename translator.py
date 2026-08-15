@@ -82,8 +82,25 @@ class DeepSeekTranslator:
             except Exception as e:
                 logger.warning(f"API 调用失败 (尝试 {attempt + 1}/{retries}): {e}")
                 if attempt < retries - 1:
-                    time.sleep(5 * (attempt + 1))
+                    time.sleep(self._backoff_seconds(e, attempt))
         raise RuntimeError("API 调用最终失败")
+
+    @staticmethod
+    def _backoff_seconds(e: Exception, attempt: int) -> float:
+        """计算重试退避时长：优先读 Retry-After 头（429/503），否则指数退避。
+
+        L8: 429 限流时用更保守的基数，避免高并发 × 3 重试雪崩。
+        """
+        status = getattr(e, "status_code", None)
+        headers = getattr(e, "headers", None) or {}
+        retry_after = headers.get("Retry-After") or headers.get("retry-after")
+        if retry_after is not None:
+            try:
+                return max(0.0, float(retry_after))
+            except (TypeError, ValueError):
+                pass
+        base = 10.0 if status == 429 else 5.0
+        return base * (2 ** attempt)
 
     def translate_block(self, text: str) -> str:
         """翻译单个文本块（用于回退）。API 失败时抛出 RuntimeError，交由调用方决定如何处理。"""
@@ -128,9 +145,13 @@ class DeepSeekTranslator:
             try:
                 para_idx = int(segments[i])
                 zh_text = segments[i + 1].strip()
-                translations[para_idx] = zh_text
             except (IndexError, ValueError):
                 continue
+            # L11: 模型重复输出同一 [BLK:N] 标记时，保留首次并告警（原实现后者静默覆盖前者）
+            if para_idx in translations:
+                logger.warning(f"段落标记 [BLK:{para_idx}] 重复输出，忽略后一次")
+                continue
+            translations[para_idx] = zh_text
 
         # 检查遗漏
         missed = [(idx, t) for idx, t in entries if idx not in translations]
