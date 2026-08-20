@@ -1,11 +1,31 @@
 import hashlib
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from utils import setup_logger
 from config import MINERU_TIMEOUT, MINERU_EFFORT
 
 logger = setup_logger(__name__)
+
+
+def _find_mineru_exe() -> str:
+    """定位 mineru 可执行文件。
+
+    优先用 PATH 查找（CLI 在已激活的 conda 环境中运行）。GUI 子进程以
+    pythonw.exe 直接启动时 PATH 不含 env 的 Scripts 目录，此时兜底到与
+    当前 Python 同一 conda 环境下的 Scripts/mineru.exe。
+    """
+    exe = shutil.which("mineru")
+    if exe:
+        return exe
+    candidate = Path(sys.executable).resolve().parent / "Scripts" / "mineru.exe"
+    if candidate.exists():
+        return str(candidate)
+    raise FileNotFoundError(
+        "未找到 mineru 可执行文件。请确认已安装 mineru，并通过 "
+        "`conda activate deepscribe` 激活环境后运行。"
+    )
 
 
 def _log_tail(path: Path, max_lines: int = 40):
@@ -43,7 +63,7 @@ def run_mineru(pdf_path: Path, output_dir: Path, backend: str = "pipeline") -> t
 
     log_path = output_dir / f"mineru_{short_stem}.log"
     cmd = [
-        "mineru",
+        _find_mineru_exe(),
         "-p", str(temp_pdf),
         "-o", str(output_dir),
         "-b", backend,

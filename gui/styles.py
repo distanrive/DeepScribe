@@ -176,7 +176,7 @@ QPushButton#actionBtn {{
     border: none;
     border-radius: 4px;
     padding: 2px 8px;
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 600;
 }}
 QPushButton#actionBtn:hover {{
@@ -389,7 +389,7 @@ QTreeWidget, QTreeView, QTableView, QTableWidget {{
     border-radius: 4px;
 }}
 QTreeWidget::item, QTreeView::item {{
-    padding: 5px 4px;
+    padding: 0px 4px;
     color: #ffffff;
 }}
 QTreeWidget::item:hover, QTreeView::item:hover {{

@@ -241,10 +241,10 @@ class WorkPage(QWidget):
                                 ("删除", self._remove_file)]:
             btn = QPushButton(text)
             btn.setObjectName("actionBtn")
-            btn.setFixedSize(44, 24)
+            btn.setFixedSize(44, 28)
             btn.setCursor(Qt.PointingHandCursor)
             btn.clicked.connect(lambda checked=False, cb=callback, p=fp: cb(p))
-            lo.addWidget(btn)
+            lo.addWidget(btn, 0, Qt.AlignVCenter)
         return w
 
     # ============================================================
