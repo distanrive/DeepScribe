@@ -166,6 +166,10 @@ class WorkPage(QWidget):
         self._force_check.setToolTip(
             "重新运行 MinerU 解析，忽略已缓存结果。\n切换解析后端（如 pipeline→hybrid-engine）后需勾选。")
         btn_row.addWidget(self._force_check)
+        self._parallel_check = QCheckBox("启用并行翻译")
+        self._parallel_check.setToolTip("PDF 含书签时按章节并行翻译；无书签自动退回串行")
+        self._parallel_check.setChecked(bool(self._config.get("parallel", "enable")))
+        btn_row.addWidget(self._parallel_check)
         btn_row.addSpacing(8)
         self._btn_all_start = self._batch_btn("▶  全部开始", "batchStart", self._start_all)
         self._btn_all_stop  = self._batch_btn("⏹  全部停止", "batchStop", self._stop_all)
@@ -247,7 +251,10 @@ class WorkPage(QWidget):
     def _start_file(self, file_path: str):
         if file_path in self._workers and self._workers[file_path].is_running():
             return
-        worker = ProcessWorker(Path(file_path), self._config.export_env(),
+        env = self._config.export_env()
+        # 工作区「启用并行翻译」复选框覆盖 config 的 parallel.enable（每次运行即时生效）
+        env["ENABLE_PARALLEL"] = "true" if self._parallel_check.isChecked() else "false"
+        worker = ProcessWorker(Path(file_path), env,
                                force=self._force_check.isChecked(),
                                parse_only=self._parse_only_check.isChecked())
         worker.signals.file_status.connect(self._on_file_status)

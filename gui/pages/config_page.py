@@ -177,13 +177,6 @@ class ConfigPage(QWidget):
         layout = QVBoxLayout(g)
         layout.setSpacing(12)
 
-        row1 = QHBoxLayout()
-        self._parallel_check = QCheckBox("启用并行翻译")
-        self._parallel_check.setToolTip("PDF 含书签时按章节并行翻译；无书签自动退回串行")
-        row1.addWidget(self._parallel_check)
-        row1.addStretch()
-        layout.addLayout(row1)
-
         row2 = QHBoxLayout()
         row2.addWidget(self._label("最大并发线程数"))
         self._workers_spin = QSpinBox()
@@ -283,7 +276,6 @@ class ConfigPage(QWidget):
         self._parser_effort_combo.setCurrentText(self._cfg.get("parser", "effort"))
         self._timeout_spin.setValue(self._cfg.get("parser", "timeout"))
 
-        self._parallel_check.setChecked(self._cfg.get("parallel", "enable"))
         self._workers_spin.setValue(self._cfg.get("parallel", "max_workers"))
         self._mineru_spin.setValue(self._cfg.get("parallel", "max_mineru"))
         self._chapter_pages_spin.setValue(self._cfg.get("parallel", "max_chapter_pages"))
@@ -319,7 +311,6 @@ class ConfigPage(QWidget):
         self._cfg.set("parser", "effort", value=self._parser_effort_combo.currentText())
         self._cfg.set("parser", "timeout", value=self._timeout_spin.value())
 
-        self._cfg.set("parallel", "enable", value=self._parallel_check.isChecked())
         self._cfg.set("parallel", "max_workers", value=self._workers_spin.value())
         self._cfg.set("parallel", "max_mineru", value=self._mineru_spin.value())
         self._cfg.set("parallel", "max_chapter_pages", value=self._chapter_pages_spin.value())
