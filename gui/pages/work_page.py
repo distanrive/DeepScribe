@@ -262,7 +262,7 @@ class WorkPage(QWidget):
         worker.signals.finished.connect(self._on_finished)
         worker.signals.part_status.connect(self._on_part_status)
         self._workers[file_path] = worker
-        self._set_item_status(file_path, "parsing")
+        self._set_item_status(file_path, "queued")
         self._log_queue.append((file_path, "▶ 开始处理"))
         worker.start()
         self._update_batch_buttons()

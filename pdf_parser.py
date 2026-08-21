@@ -8,6 +8,10 @@ from config import MINERU_TIMEOUT, MINERU_EFFORT
 
 logger = setup_logger(__name__)
 
+# Windows 下阻止 mineru.exe（控制台程序）在 GUI 中弹出命令行窗口；
+# 其他平台无此常量，回退为 0（无副作用）。
+_CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
 
 def _find_mineru_exe() -> str:
     """定位 mineru 可执行文件。
@@ -82,6 +86,7 @@ def run_mineru(pdf_path: Path, output_dir: Path, backend: str = "pipeline") -> t
                 encoding="utf-8",
                 errors="replace",
                 timeout=MINERU_TIMEOUT,
+                creationflags=_CREATE_NO_WINDOW,
             )
     except subprocess.TimeoutExpired as e:
         logger.error(f"MinerU 超时（>{MINERU_TIMEOUT}s）: {e}")

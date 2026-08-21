@@ -976,9 +976,10 @@ def _process_pdf_parallel(output_dir: Path, pdf_path: Path, _stem: str,
 
     def _do_chapter(_i: int, _title: str, _sub_pdf_path: Path) -> dict:
         """单个章节：Semaphore 保护 MinerU → 独立图片 → 翻译。"""
-        if progress_callback:
-            progress_callback(_i, "parsing", _title)
         with mineru_sem:
+            # 获得 MinerU 槽位后才报"解析中"（此前保持"等待中"）
+            if progress_callback:
+                progress_callback(_i, "parsing", _title)
             # GUI 跨进程 MinerU 全局并发限制（GPU 显存保护），无锁时退化为 nullcontext
             with (mineru_lock() if mineru_lock else nullcontext()):
                 _chapter_mineru_out = temp_dir / f"{_stem}_ch{_i}_mineru"
@@ -1137,8 +1138,6 @@ def _parse_pdf_to_md(pdf_path: Path, output_dir: Path, temp_dir: Path,
     Returns:
         (md_text, assets_dir)
     """
-    if progress_callback:
-        progress_callback(-1, "parsing", pdf_path.stem)
     mineru_out = temp_dir / f"{_stem}_mineru"
 
     # 1. MinerU 解析（复用缓存，除非 force）
@@ -1147,10 +1146,17 @@ def _parse_pdf_to_md(pdf_path: Path, output_dir: Path, temp_dir: Path,
     if hybrid_md_path.exists():
         md_path = hybrid_md_path
     if force or not md_path.exists():
+        # 先报"等待中"，获得 MinerU 槽位后再报"解析中"（多文件时反映真实并发）
+        if progress_callback:
+            progress_callback(-1, "queued", pdf_path.stem)
         # GUI 跨进程 MinerU 全局并发限制（GPU 显存保护），无锁时退化为 nullcontext
         with (mineru_lock() if mineru_lock else nullcontext()):
+            if progress_callback:
+                progress_callback(-1, "parsing", pdf_path.stem)
             md_path, images_dir = run_mineru(pdf_path, mineru_out, backend=MINERU_BACKEND)
     else:
+        if progress_callback:
+            progress_callback(-1, "parsing", pdf_path.stem)
         images_dir = md_path.parent / "images"
         if not images_dir.is_dir():
             images_dir = md_path.parent
@@ -1218,9 +1224,10 @@ def _parse_only_parallel(pdf_path: Path, output_dir: Path, temp_dir: Path,
     failures = []
 
     def _do_chapter(i: int, title: str, sub_pdf_path: Path) -> tuple[int, str, str]:
-        if progress_callback:
-            progress_callback(i, "parsing", title)
         with mineru_sem:
+            # 获得 MinerU 槽位后才报"解析中"（此前保持"等待中"）
+            if progress_callback:
+                progress_callback(i, "parsing", title)
             with (mineru_lock() if mineru_lock else nullcontext()):
                 _out = temp_dir / f"{_stem}_ch{i}_mineru"
                 _md_path, _images_dir = run_mineru(sub_pdf_path, _out, backend=MINERU_BACKEND)

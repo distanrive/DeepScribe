@@ -27,6 +27,9 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # 子进程进度标记前缀（与 gui._runner.PROGRESS_PREFIX 保持一致）
 _PROGRESS_PREFIX = "@@DS_PROGRESS@@ "
 
+# Windows 下阻止子进程弹出命令行窗口（GUI 无控制台环境下）
+_CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
 
 class Signals(QObject):
     file_status = pyqtSignal(str, str, object)
@@ -117,7 +120,7 @@ class ProcessWorker(QThread):
             if self.parse_only:
                 cmd.append("--parse-only")
 
-            self.signals.file_status.emit(fp, "status", "parsing")
+            self.signals.file_status.emit(fp, "status", "queued")
             self.signals.log.emit(fp, f"开始处理: {self.pdf_path.name}")
 
             if self._cancel.is_set():
@@ -136,6 +139,7 @@ class ProcessWorker(QThread):
                 encoding="utf-8",
                 errors="replace",
                 bufsize=1,
+                creationflags=_CREATE_NO_WINDOW,
             )
             with self._proc_lock:
                 self._proc = proc
