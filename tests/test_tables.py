@@ -29,6 +29,21 @@ class TestHtmlTablesToMD(unittest.TestCase):
         html = "<table><tr><td>A</td></tr></table>"
         self.assertEqual(M.html_tables_to_md(html), html)
 
+    def test_caption_preserved_above_table(self):
+        # 回归：<caption> 不在任何 <tr> 里，只按 <tr> 解析会把它整段丢掉。
+        # 表题是正文的一部分，丢了两个语言版本里都找不回来。
+        html = ('<table><caption>Table 3: 实验参数</caption>'
+                '<tr><td>A</td><td>B</td></tr>'
+                '<tr><td>C</td><td>D</td></tr></table>')
+        self.assertEqual(
+            M.html_tables_to_md(html),
+            "Table 3: 实验参数\n\n| A | B |\n| --- | --- |\n| C | D |")
+
+    def test_caption_with_inline_html_stripped(self):
+        html = ('<table><caption>Table 1: <b>bold</b> 标题</caption>'
+                '<tr><td>A</td></tr><tr><td>B</td></tr></table>')
+        self.assertTrue(M.html_tables_to_md(html).startswith("Table 1: bold 标题"))
+
     def test_whitespace_tolerant(self):
         html = ("<table>\n  <tr><td>A</td><td>B</td></tr>\n"
                 "  <tr><td>C</td><td>D</td></tr>\n</table>")

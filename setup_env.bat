@@ -1,32 +1,33 @@
 @echo off
-REM DeepScribe ä¸€é”®é…ç½® conda ç¯å¢ƒï¼ˆmineru + PyTorch CUDA + GUI ä¾èµ–ï¼‰
-REM ç”¨æ³•ï¼šåŒå‡»è¿è¡Œï¼ˆéœ€å·²å®‰è£… conda ä¸”å¯åœ¨å½“å‰ shell ä¸­è°ƒç”¨ conda å‘½ä»¤ï¼‰
+REM DeepScribe Ò»¼üÅäÖÃ conda »·¾³£¨mineru + PyTorch CUDA + GUI ÒÀÀµ£©
+REM ÓÃ·¨£ºË«»÷ÔËĞĞ£¨ĞèÒÑ°²×° conda ÇÒ¿ÉÔÚµ±Ç° shell ÖĞµ÷ÓÃ conda ÃüÁî£©
 setlocal
 
 set ENV_NAME=deepscribe
 set PYTHON_VER=3.10
 
 echo ============================================================
-echo   DeepScribe ç¯å¢ƒé…ç½®ï¼š%ENV_NAME% (Python %PYTHON_VER%)
+echo   DeepScribe »·¾³ÅäÖÃ£º%ENV_NAME% (Python %PYTHON_VER%)
 echo ============================================================
-echo [1/3] åˆ›å»º conda ç¯å¢ƒ
+echo [1/3] ´´½¨ conda »·¾³
 call conda create -n %ENV_NAME% python=%PYTHON_VER% -y || goto :err
 call conda activate %ENV_NAME% || goto :err
 
-echo [2/3] å®‰è£… MinerU + æµæ°´çº¿ä¾èµ– + PyQt5ï¼ˆGUIï¼‰
-call pip install "mineru[all]" openai python-dotenv PyMuPDF PyQt5 || goto :err
+echo [2/3] °²×° MinerU + Á÷Ë®ÏßÒÀÀµ + GUI ºó¶ËÒÀÀµ
+REM websockets ¡ª¡ª Godot GUI µÄ Python ºó¶Ë£¨godot_gui/backend/main.py£©ÓÃËü
+call pip install "mineru[all]" openai python-dotenv PyMuPDF websockets || goto :err
 
-echo [3/3] CUDA ç‰ˆ PyTorchï¼ˆGPU ç”¨æˆ·ï¼Œhybrid-engine éœ€è¦ï¼‰
-echo    RTX 4060 + Driver 560.94 å¯¹åº” CUDA 12.6ï¼Œå®‰è£… cu126 ç‰ˆï¼š
+echo [3/3] CUDA °æ PyTorch£¨GPU ÓÃ»§£¬hybrid-engine ĞèÒª£©
+echo    RTX 4060 + Driver 560.94 ¶ÔÓ¦ CUDA 12.6£¬°²×° cu126 °æ£º
 echo      pip uninstall torch torchvision torchaudio -y
 echo      pip install torch==2.8.0 torchvision==0.23.0 --index-url https://download.pytorch.org/whl/cu126
-echo    éªŒè¯ï¼špython -c "import torch; print(torch.cuda.is_available())" åº”è¾“å‡º True
+echo    ÑéÖ¤£ºpython -c "import torch; print(torch.cuda.is_available())" Ó¦Êä³ö True
 echo ------------------------------------------------------------
-echo ç¯å¢ƒ %ENV_NAME% å°±ç»ªã€‚
+echo »·¾³ %ENV_NAME% ¾ÍĞ÷¡£
 pause
 exit /b 0
 
 :err
-echo å‡ºé”™ï¼Œè¯·æ£€æŸ¥ä¸Šæ–¹æ—¥å¿—ã€‚
+echo ³ö´í£¬Çë¼ì²éÉÏ·½ÈÕÖ¾¡£
 pause
 exit /b 1

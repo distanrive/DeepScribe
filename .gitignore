@@ -7,4 +7,5 @@ oldversion/
 CLAUDE.md
 config.json
 run_gui.bat
+run_godot_gui.bat
 logs/

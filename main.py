@@ -12,7 +12,7 @@ from config import (
     MINERU_BACKEND, TARGET_TOKENS_PER_CALL, MAX_PARAS_PER_CALL,
     MIN_MARKER_RETENTION, ENABLE_PARALLEL, MAX_PARALLEL_WORKERS,
     MAX_PARALLEL_MINERU, MAX_CHAPTER_PAGES, MAX_TOKENS,
-    ENABLE_INTEGRITY,
+    ENABLE_INTEGRITY, OUTPUT_WARNINGS, OUTPUT_CHAPTERS,
 )
 from utils import setup_logger
 from pdf_parser import run_mineru
@@ -519,6 +519,17 @@ def html_tables_to_md(text: str) -> str:
             md_rows.append('| ' + ' | '.join(row) + ' |')
             if ri == 0:
                 md_rows.append('| ' + ' | '.join(['---'] * max_col) + ' |')
+
+        # <caption> 不在任何 <tr> 里，只按 <tr> 解析会把它整段丢掉。表题是正文
+        # 的一部分（"Table 3: 实验参数"），丢了两版输出里都找不回来 —— 提取出来
+        # 放到表格上方。
+        cap = re.search(r'<caption[^>]*>(.*?)</caption>', html, re.DOTALL | re.IGNORECASE)
+        if cap:
+            cap_text = re.sub(r'<[^>]+>', '', cap.group(1)).strip()
+            if cap_text:
+                md_rows.insert(0, _escape_cell(cap_text))
+                md_rows.insert(1, '')
+
         return '\n'.join(md_rows)
 
     return re.sub(r'<table[^>]*>.*?</table>', _convert, text,
@@ -546,11 +557,15 @@ def dedup_adjacent_images(text: str) -> str:
             # 重复图片：保留有 alt 的（中间只有空行）
             prev_m = re.search(r'!\[(.*?)]\(([^)]+)\)', result[last_img_idx])
             prev_alt = prev_m.group(1) if prev_m else ''
-            if prev_alt and not cur_alt:
-                pass  # 前一条更好，跳过当前
-            elif cur_alt and not prev_alt:
+            # 丢掉的应当只是这一行的**图片引用**，不是整行：MinerU 常把图注和图片
+            # 排在同一行（"![](a.png) Figure 3: ..."），整行丢弃会把图注一起吃掉。
+            rest = (line[:m.start()] + line[m.end():]).strip()
+            if cur_alt and not prev_alt and not rest:
                 result[last_img_idx] = line  # 当前更好，替换前一条
             # 两条都有或都没有 alt → 保留前一条
+            if rest:
+                result.append(rest)      # 图注另起一行，内容不丢
+                prev_src = None          # 这一行已经不是图片行了，后续不再相邻判定
             continue
         prev_src = cur_src
         result.append(line)
@@ -592,12 +607,17 @@ def _is_url(path: str) -> bool:
 
 def process_images(md_text: str, images_dir: Path, output_dir: Path,
                    doc_stem: str, quiet: bool = False,
-                   asset_suffix: str = "_zh") -> tuple[str, Path]:
+                   asset_suffix: str = "_zh",
+                   mapping: dict[str, int] | None = None) -> tuple[str, Path]:
     """
     处理 MD 中所有图片引用（![](...) 和 <img src="..."/>）：
     1. 按出现顺序去重，编号 image-1, image-2, ...
     2. 从 images_dir 递归查找原图，复制到 {doc_stem}{asset_suffix}.assets/
     3. 替换 MD 中的引用为 Markdown ![]() 格式
+
+    mapping: 可选的「原图 basename → 编号」共享映射（入参 = 空 dict 时会把本次
+             算出的编号写进去）。**同一批图片处理多种语言时必须共用一份**，
+             否则各语言的编号可能不一致，写入同一个 assets 目录后互相串图。
     """
     assets_name = f"{doc_stem}{asset_suffix}.assets"
 
@@ -614,13 +634,19 @@ def process_images(md_text: str, images_dir: Path, output_dir: Path,
         return md_text, assets_dir
 
     # 去重（保持首次出现顺序）
-    seen = {}          # old_filename -> order_number
+    seen: dict[str, int] = dict(mapping) if mapping else {}   # old_filename -> order_number
+    next_order = max(seen.values(), default=0) + 1
     for _, img_path, _pos in all_refs:
         if _is_url(img_path):
             continue  # 外部图片 URL 不重命名
         old_name = Path(img_path).name
         if old_name not in seen:
-            seen[old_name] = len(seen) + 1
+            seen[old_name] = next_order
+            next_order += 1
+    if mapping is not None:
+        # 回写「累积」映射：首次调用把编号定下来，后续语言沿用同一份，并把它
+        # 自己新引入的图片接到编号末尾（不会改动已定下的编号）。
+        mapping.update(seen)
 
     if not seen:
         assets_dir = output_dir / assets_name
@@ -722,6 +748,12 @@ def split_md_blocks(md_text: str) -> list[dict]:
 # 单段连续翻译失败达到该次数后，用原文兜底并告警（避免无限重试）
 MAX_FAILED_ATTEMPTS = 3
 
+# marker 保留率过低时自适应缩小 chunk 的**绝对**下限。
+# 注意它是「下限」而不是「缩到 70% 之后不许低于 20000」—— 后者在
+# MAX_TOKENS ≤ 40000（初始 target 已被 MAX_TOKENS//2 钳到 20000 以下）时
+# 会反过来把目标**放大**，与缩小的意图相反。
+MIN_CHUNK_TOKENS = 2000
+
 
 def translate_blocks(blocks: list[dict], db: TranslationDB,
                      translator: DeepSeekTranslator,
@@ -809,7 +841,7 @@ def translate_blocks(blocks: list[dict], db: TranslationDB,
                 if retention < MIN_MARKER_RETENTION and sent > 5:
                     # 遗漏较多，缩小目标，用更小 chunk 重建剩余段落
                     old_target = target_tokens
-                    target_tokens = max(20000, int(target_tokens * 0.7))
+                    target_tokens = max(MIN_CHUNK_TOKENS, int(target_tokens * 0.7))
                     logger.warning(
                         f"marker 保留率 {retention:.0%} < {MIN_MARKER_RETENTION:.0%}, "
                         f"目标 token 数: {old_target:,} → {target_tokens:,}"
@@ -900,10 +932,13 @@ def _process_chapter_pdf(order: int, title: str, pdf_path: Path | None,
 
     db_path = temp_dir / f"{_stem}_ch{order}_translate.db"
     db = TranslationDB(db_path)
+    translator = None
     try:
         translator = DeepSeekTranslator()
         trans_map = translate_blocks(blocks, db, translator, label=title)
     finally:
+        if translator is not None:
+            translator.close()
         db.close()
         # M1: 保留章节 DB 用于断点续传。已完成章节重跑时直接复用缓存译文，
         # 避免并行模式中断重跑后对已完成章节重复翻译、重复计费。
@@ -942,7 +977,9 @@ def _process_chapter_pdf(order: int, title: str, pdf_path: Path | None,
 def _process_pdf_parallel(output_dir: Path, pdf_path: Path, _stem: str,
                           bookmarks: list[tuple[int, str, int]], total_pages: int,
                           label: str = "", temp_dir: Path | None = None,
-                          progress_callback=None, mineru_lock=None) -> None:
+                          progress_callback=None, mineru_lock=None,
+                          output_warnings: bool = True,
+                          output_chapters: bool = True) -> None:
     """
     并行翻译流程：按书签页码拆分 PDF → 各章独立 MinerU + 翻译 → 合并 → 后处理。
 
@@ -954,6 +991,8 @@ def _process_pdf_parallel(output_dir: Path, pdf_path: Path, _stem: str,
         total_pages: PDF 总页数
         label: 输出文件名前缀
         temp_dir: 中间产物目录
+        output_warnings: 是否写 {stem}_warnings.md
+        output_chapters: 是否写 output/part/ 各章副本
     """
     if temp_dir is None:
         temp_dir = _ensure_temp_dir()
@@ -1059,8 +1098,14 @@ def _process_pdf_parallel(output_dir: Path, pdf_path: Path, _stem: str,
         zh_text = _pat.sub(_repl, zh_text)
         en_text = _pat.sub(_repl, en_text)
     if any(_merged_img_dir.iterdir()):
-        zh_text, assets_dir = process_images(zh_text, _merged_img_dir, output_dir, _out)
-        en_text, _ = process_images(en_text, _merged_img_dir, output_dir, _out, quiet=True)
+        # zh / en 必须共用同一份「原图 → image-N」映射：译文由 LLM 产出，可能漏掉
+        # 某张图的引用，各自编号会让同一个 image-N 在两次调用里指向不同源图，
+        # 后写的那次还会因为「目标已存在」跳过复制 —— 结果是 en 里的图配错。
+        _img_map: dict[str, int] = {}
+        zh_text, assets_dir = process_images(
+            zh_text, _merged_img_dir, output_dir, _out, mapping=_img_map)
+        en_text, _ = process_images(
+            en_text, _merged_img_dir, output_dir, _out, quiet=True, mapping=_img_map)
     else:
         assets_dir = output_dir / f"{_out}_zh.assets"
         assets_dir.mkdir(parents=True, exist_ok=True)
@@ -1080,10 +1125,13 @@ def _process_pdf_parallel(output_dir: Path, pdf_path: Path, _stem: str,
             shutil.rmtree(_ch_mu)
         except OSError:
             pass
-    try:
-        shutil.rmtree(_temp_part_dir)
-    except OSError:
-        pass
+    # _temp_part_dir 里是各章的 {_stem}_ch{i}_zh.assets/，分章输出的 md 要引用它们，
+    # 所以留到第 7 步搬到 output/part/ 之后再删；不开分章输出时就地清掉。
+    if not output_chapters:
+        try:
+            shutil.rmtree(_temp_part_dir)
+        except OSError:
+            pass
 
     # 6. 后处理
     zh_text = _postprocess_md(zh_text)
@@ -1091,21 +1139,45 @@ def _process_pdf_parallel(output_dir: Path, pdf_path: Path, _stem: str,
 
     # 7. 分章输出 → PDF 所在目录
     # L5: 分章文件应用与合并版一致的后处理，避免读者看到两个内容版本
-    _part_dir = output_dir / "part"
-    _part_dir.mkdir(parents=True, exist_ok=True)
-    for cr in chapter_results:
-        safe = re.sub(r'[\\/:*?"<>|]', '_', cr['title']).strip()
-        part_path = _part_dir / f"{cr['order']:02d}_{safe}.md"
-        with open(part_path, "w", encoding="utf-8") as pf:
-            pf.write(_postprocess_md(cr['zh_text']))
-    logger.info(f"分章输出: {len(chapter_results)} 章 → {_part_dir}")
+    if output_chapters:
+        _part_dir = output_dir / "part"
+        _part_dir.mkdir(parents=True, exist_ok=True)
+        # 各章 md 引用的是 {_stem}_ch{i}_zh.assets/…，而这些资产只存在于 temp 的
+        # part 目录（原本在第 5 步就被清掉）—— 不搬过来的话每张图都是死链。
+        # 搬到 part/ 下，引用相对 part md 所在目录即可解析（与 CLAUDE.md 记录的
+        # 输出结构一致：part/{NN}_{title}.md + {_stem}_ch{NN}_zh.assets/）。
+        for _i in range(len(sub_pdfs)):
+            _src = _temp_part_dir / f"{_stem}_ch{_i}_zh.assets"
+            if not _src.is_dir():
+                continue
+            _dst = _part_dir / _src.name
+            try:
+                if _dst.exists():
+                    shutil.rmtree(_dst)
+                shutil.move(str(_src), str(_dst))
+            except OSError as e:
+                logger.warning(f"分章图片目录搬移失败 {_src} → {_dst}: {e}")
+        for cr in chapter_results:
+            safe = re.sub(r'[\\/:*?"<>|]', '_', cr['title']).strip()
+            part_path = _part_dir / f"{cr['order']:02d}_{safe}.md"
+            with open(part_path, "w", encoding="utf-8") as pf:
+                pf.write(_postprocess_md(cr['zh_text']))
+        logger.info(f"分章输出: {len(chapter_results)} 章 → {_part_dir}")
+        # 资产已搬空，清掉 temp 里的空壳
+        try:
+            shutil.rmtree(_temp_part_dir)
+        except OSError:
+            pass
+    else:
+        logger.info("分章输出已关闭，跳过 output/part/")
 
     # 8. 警告 + 失败报告 → 输出到 PDF 所在目录
     all_warnings = []
     for cr in chapter_results:
         for w in cr.get('warnings', []):
             all_warnings.append(f"[{cr['title']}] {w}")
-    write_warnings_file(output_dir, _out, all_warnings)
+    if output_warnings:
+        write_warnings_file(output_dir, _out, all_warnings)
     write_failure_report(output_dir, _out, failures)
 
     # 9. 写入最终文件
@@ -1153,7 +1225,10 @@ def _parse_pdf_to_md(pdf_path: Path, output_dir: Path, temp_dir: Path,
         with (mineru_lock() if mineru_lock else nullcontext()):
             if progress_callback:
                 progress_callback(-1, "parsing", pdf_path.stem)
-            md_path, images_dir = run_mineru(pdf_path, mineru_out, backend=MINERU_BACKEND)
+            # 显式传 _stem：pdf_path 可能是加密 PDF 解密后的副本，默认短名会
+            # 从副本路径算起，与上面的缓存探测路径对不上，导致永远重解析
+            md_path, images_dir = run_mineru(pdf_path, mineru_out,
+                                             backend=MINERU_BACKEND, short_stem=_stem)
     else:
         if progress_callback:
             progress_callback(-1, "parsing", pdf_path.stem)
@@ -1303,19 +1378,74 @@ def _parse_only_parallel(pdf_path: Path, output_dir: Path, temp_dir: Path,
     logger.info(f"并行仅解析完成: {out_path}")
 
 
+# ==== 临时逻辑：加密 PDF 用固定密码解密（待正式密码方案后移除）====
+_TEMP_PDF_PASSWORD = "ustc1958"
+
+
+def _decrypt_pdf_if_needed(pdf_path: Path, temp_dir: Path, _stem: str) -> Path:
+    """若 PDF 需要打开密码，尝试用固定密码解密并另存为无加密副本。
+
+    临时逻辑：仅针对已知打开密码（用户密码）的场景。未加密、无 fitz 或
+    解密失败时返回原路径，交回原流程照常处理（该报错报错）。解密成功返回
+    副本路径；副本保留原始文件名，不影响 _zh/_en 输出命名。
+    """
+    try:
+        import fitz
+    except ImportError:
+        return pdf_path
+
+    try:
+        doc = fitz.open(str(pdf_path))
+    except Exception as e:
+        logger.warning(f"无法打开 PDF（交回原流程处理）: {e}")
+        return pdf_path
+
+    try:
+        # needs_pass=False：无需用户密码即可打开（含仅 owner 密码、空用户密码）
+        if not doc.needs_pass:
+            return pdf_path
+
+        # authenticate 接受用户密码或所有者密码，成功返回 >0
+        if not doc.authenticate(_TEMP_PDF_PASSWORD):
+            logger.error(
+                f"PDF 已加密，固定密码 '{_TEMP_PDF_PASSWORD}' 验证失败: {pdf_path.name}"
+            )
+            return pdf_path
+
+        dec_dir = temp_dir / f"{_stem}_decrypted"
+        dec_dir.mkdir(parents=True, exist_ok=True)
+        dec_path = dec_dir / pdf_path.name
+        doc.save(str(dec_path), encryption=fitz.PDF_ENCRYPT_NONE)
+        logger.info(f"已用固定密码解密: {pdf_path.name} → {dec_path}")
+        return dec_path
+    except Exception as e:
+        logger.error(f"解密失败: {e}")
+        return pdf_path
+    finally:
+        doc.close()
+
+
 def process_pdf(pdf_path: Path, output_dir: Path | None = None,
                 force: bool = False, parallel: bool = None,
                 temp_dir: Path | None = None,
                 progress_callback=None, mineru_lock=None,
-                parse_only: bool = False):
+                parse_only: bool = False,
+                output_warnings: bool | None = None,
+                output_chapters: bool | None = None):
     """处理单个 PDF。progress_callback(chapter_order, title) 用于并行模式的章节通知。
 
     mineru_lock: 可选，调用后返回上下文管理器的可调用对象，用于在 MinerU
                  运行期间加全局并发锁（GUI 跨进程 GPU 显存保护）。
     parse_only: 仅运行 MinerU 解析并输出 {stem}_parsed.md，跳过翻译（省 API 费用）。
+    output_warnings: 是否写 {stem}_warnings.md；None 时取 config.OUTPUT_WARNINGS。
+    output_chapters: 是否写 output/part/ 各章副本；None 时取 config.OUTPUT_CHAPTERS。
     """
     if parallel is None:
         parallel = ENABLE_PARALLEL
+    if output_warnings is None:
+        output_warnings = OUTPUT_WARNINGS
+    if output_chapters is None:
+        output_chapters = OUTPUT_CHAPTERS
     if output_dir is None:
         output_dir = pdf_path.parent
     if temp_dir is None:
@@ -1325,6 +1455,10 @@ def process_pdf(pdf_path: Path, output_dir: Path | None = None,
     # 短名哈希输入含完整路径：避免不同目录下同名 PDF 共用同一 DB / MinerU 输出目录
     _stem = "_" + hashlib.sha256(str(pdf_path.resolve()).encode()).hexdigest()[:12]
     logger.info(f"短名 {_stem} ← {pdf_stem}")
+
+    # ==== 临时逻辑：加密 PDF 尝试固定密码解密（成功则改用无加密副本）====
+    pdf_path = _decrypt_pdf_if_needed(pdf_path, temp_dir, _stem)
+
     logger.info(f"输出目录: {output_dir}")
 
     # --- 仅解析模式：只跑 MinerU + 规范化 + 图片处理，跳过翻译 ---
@@ -1344,6 +1478,8 @@ def process_pdf(pdf_path: Path, output_dir: Path | None = None,
                     temp_dir=temp_dir,
                     progress_callback=progress_callback,
                     mineru_lock=mineru_lock,
+                    output_warnings=output_warnings,
+                    output_chapters=output_chapters,
                 )
                 return
             except Exception as e:
@@ -1367,10 +1503,13 @@ def process_pdf(pdf_path: Path, output_dir: Path | None = None,
     db_path = temp_dir / f"{_stem}_translate.db"
     db = TranslationDB(db_path)
 
+    translator = None
     try:
         translator = DeepSeekTranslator()
         trans_map = translate_blocks(blocks, db, translator)
     finally:
+        if translator is not None:
+            translator.close()
         db.close()
         if db_path.exists():
             db_path.unlink()
@@ -1403,7 +1542,8 @@ def process_pdf(pdf_path: Path, output_dir: Path | None = None,
     if zh_warnings:
         logger.info(f"中文版标题修正: {len(zh_warnings)} 处")
 
-    write_warnings_file(output_dir, pdf_stem, g2_warnings + zh_warnings)
+    if output_warnings:
+        write_warnings_file(output_dir, pdf_stem, g2_warnings + zh_warnings)
 
     # 后处理
     zh_text = _postprocess_md(zh_text)

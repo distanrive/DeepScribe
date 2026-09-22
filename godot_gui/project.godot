@@ -1,0 +1,48 @@
+; Engine configuration file.
+; It's best edited using the editor UI and not directly,
+; since the parameters that go here are not all obvious.
+;
+; Format:
+;   [section] ; section goes between []
+;   param=value ; assign values to parameters
+
+config_version=5
+
+[animation]
+
+compatibility/default_parent_skeleton_in_mesh_instance_3d=true
+
+[application]
+
+config/name="DeepScribe"
+config/description="DeepScribe — PDF 学术翻译：Godot 前端 + Python 后端"
+run/main_scene="res://scenes/app.tscn"
+config/features=PackedStringArray("4.7")
+
+[autoload]
+
+ThemeManager="*res://scripts/autoload/theme_manager.gd"
+NetClient="*res://scripts/autoload/net_client.gd"
+AppShell="*res://scripts/autoload/app_shell.gd"
+BackendLauncher="*res://scripts/autoload/backend_launcher.gd"
+
+[backend]
+
+python="C:/Users/YH/.conda/envs/deepscribe/python.exe"
+script="res://backend/main.py"
+autostart=true
+kill_on_exit=true
+probe="websockets"
+
+[display]
+
+; 初始窗口大小（物理像素）。拉伸模式是 disabled，所以它就是窗口尺寸。
+; 1440p（2560×1440）+ 系统 125% 缩放下，1600×1200 留出任务栏与标题栏后正好，
+; 内容区逻辑尺寸 1280×960（AppShell 的 content_scale_factor = 1.25）。
+; 用户拖动过窗口后，尺寸记在 user://config.cfg 的 [window] 段，会覆盖这里的默认值。
+window/size/viewport_width=1600
+window/size/viewport_height=1200
+
+[rendering]
+
+environment/defaults/default_clear_color=Color(0.957, 0.961, 0.969, 1)

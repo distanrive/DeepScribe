@@ -26,7 +26,7 @@ _LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
 # 本地持久化日志文件路径（环境变量 DEEPSCRIBE_LOG_FILE 指定）。
 # 设置后，所有模块日志除 stdout 外还会同时写入该文件（每条记录即时 flush），
 # 用于 GUI 闪退 / 远控断连后排查问题。CLI 与 GUI 子进程默认不设置，
-# 仅在需要落地日志时注入（见 gui/_runner.py 与 gui/main.py）。
+# 仅在需要落地日志时注入（见 dsctl/worker.py 与 godot_gui/backend/main.py）。
 
 
 def _file_handler() -> logging.Handler | None:

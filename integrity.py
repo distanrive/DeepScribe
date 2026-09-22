@@ -78,28 +78,33 @@ def verify_block(en: str, zh: str) -> tuple[str, list[str]]:
     # 收集所有回填，按 start 从大到小一次应用，避免位置错乱
     replacements = []
 
-    n_code = min(len(code_en), len(code_zh))
-    for k in range(n_code):
-        en_text, en_s, en_e = code_en[k]
-        zh_text, zh_s, zh_e = code_zh[k]
-        if en_text != zh_text:
-            # 回填完整原文 span（含分隔符反引号），不能只用内层文本否则丢分隔符
-            replacements.append((zh_s, zh_e, en[en_s:en_e]))
-            warnings.append(f"行内代码 #{k} 不匹配，已回填原文")
-    if len(code_en) != len(code_zh):
-        warnings.append(f"行内代码数量不一致: 原文 {len(code_en)} vs 译文 {len(code_zh)}")
+    # 数量不一致时**不做位置回填**：按序号配对（min(n) 那一套）只在数量相同时
+    # 才是「第 k 个对第 k 个」。译文一旦多出或少掉一个 span，后面每一对都错位，
+    # 回填就变成把正确的 span 换成另一个（实测：译文多个 `新` 会被 en 的 `y` 顶掉，
+    # 结果 `x`、`y` 出现两次，原文那个 `新` 消失）。提示词本来就要求 LLM 不得增删，
+    # 所以这种情形按「需要人工核对」处理，只告警。
+    if len(code_en) == len(code_zh):
+        for k, (en_text, en_s, en_e) in enumerate(code_en):
+            zh_text, zh_s, zh_e = code_zh[k]
+            if en_text != zh_text:
+                # 回填完整原文 span（含分隔符反引号），不能只用内层文本否则丢分隔符
+                replacements.append((zh_s, zh_e, en[en_s:en_e]))
+                warnings.append(f"行内代码 #{k} 不匹配，已回填原文")
+    elif code_en or code_zh:
+        warnings.append(f"行内代码数量不一致: 原文 {len(code_en)} vs 译文 {len(code_zh)}，"
+                        "已跳过回填（位置无法对齐，请人工核对）")
 
-    n_math = min(len(math_en), len(math_zh))
-    for k in range(n_math):
-        en_text, en_s, en_e = math_en[k]
-        zh_text, zh_s, zh_e = math_zh[k]
-        if canonicalize_latex(en_text) != canonicalize_latex(zh_text):
-            # 回填完整原文 span（含 $ 分隔符）；span 取自原 en（未掩码），
-            # 即使用掩码提取，也恢复真实公式而非掩码后的空格
-            replacements.append((zh_s, zh_e, en[en_s:en_e]))
-            warnings.append(f"行内公式 #{k} 不匹配，已回填原文")
-    if len(math_en) != len(math_zh):
-        warnings.append(f"行内公式数量不一致: 原文 {len(math_en)} vs 译文 {len(math_zh)}")
+    if len(math_en) == len(math_zh):
+        for k, (en_text, en_s, en_e) in enumerate(math_en):
+            zh_text, zh_s, zh_e = math_zh[k]
+            if canonicalize_latex(en_text) != canonicalize_latex(zh_text):
+                # 回填完整原文 span（含 $ 分隔符）；span 取自原 en（未掩码），
+                # 即使用掩码提取，也恢复真实公式而非掩码后的空格
+                replacements.append((zh_s, zh_e, en[en_s:en_e]))
+                warnings.append(f"行内公式 #{k} 不匹配，已回填原文")
+    elif math_en or math_zh:
+        warnings.append(f"行内公式数量不一致: 原文 {len(math_en)} vs 译文 {len(math_zh)}，"
+                        "已跳过回填（位置无法对齐，请人工核对）")
 
     for s, e, rep in sorted(replacements, key=lambda x: -x[0]):
         zh = zh[:s] + rep + zh[e:]

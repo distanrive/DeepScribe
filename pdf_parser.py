@@ -43,7 +43,8 @@ def _log_tail(path: Path, max_lines: int = 40):
         logger.error(ln.rstrip())
 
 
-def run_mineru(pdf_path: Path, output_dir: Path, backend: str = "pipeline") -> tuple[Path, Path]:
+def run_mineru(pdf_path: Path, output_dir: Path, backend: str = "pipeline",
+               short_stem: str | None = None) -> tuple[Path, Path]:
     """
     运行 MinerU，返回 (md_path, images_dir)。
 
@@ -54,13 +55,20 @@ def run_mineru(pdf_path: Path, output_dir: Path, backend: str = "pipeline") -> t
         output_dir/<short_stem>/auto/<short_stem>.md
         output_dir/<short_stem>/auto/images/
 
+    short_stem: 覆盖默认短名。**调用方必须传这个值**，只要 pdf_path 不是
+    原始 PDF 本身（例如加密 PDF 解密后的副本）—— 默认短名取自
+    `pdf_path.resolve()`，传副本进来算出的短名与上层 `_stem` 不一致，
+    上层按 `_stem` 探测 MinerU 缓存就会永远落空，每次运行都重解析。
+    None 时按 pdf_path 计算（与上层 `_stem` 同源的普通情形）。
+
     stdout/stderr 重定向到 {output_dir}/mineru_{short_stem}.log。
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # 始终用短名副本：SHA256 前 12 位 hex，~15 字符，远低于 MAX_PATH
     # 哈希输入含完整路径：不同目录下同名 PDF 互不踩踏临时副本 / 输出目录
-    short_stem = "_" + hashlib.sha256(str(pdf_path.resolve()).encode()).hexdigest()[:12]
+    if short_stem is None:
+        short_stem = "_" + hashlib.sha256(str(pdf_path.resolve()).encode()).hexdigest()[:12]
     temp_pdf = output_dir / f"{short_stem}.pdf"
     shutil.copy2(pdf_path, temp_pdf)
     logger.info(f"临时副本: {temp_pdf}  ← {pdf_path}")

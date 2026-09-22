@@ -6,7 +6,7 @@ load_dotenv()
 # --- DeepSeek API 设置 ---
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
-DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
+DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-flash")
 MAX_TOKENS = int(os.getenv("MAX_TOKENS", "65536"))
 TRANSLATE_TEMP = float(os.getenv("TRANSLATE_TEMP", "0.3"))
 USE_THINKING = os.getenv("USE_THINKING", "false").lower() in ("true", "1", "yes")
@@ -56,4 +56,13 @@ MAX_CHAPTER_PAGES = int(os.getenv("MAX_CHAPTER_PAGES", "100"))
 # --- 完整性校验设置 ---
 # 校验译文内嵌行内公式/行内代码是否被破坏并自动回填（无额外 API、只回填+告警）
 ENABLE_INTEGRITY = os.getenv("ENABLE_INTEGRITY", "true").lower() in ("true", "1", "yes")
+
+# --- 输出文件开关 ---
+# 标题修正 / G2 告警报告 {stem}_warnings.md。关掉不影响失败报告
+# {stem}_failed.md —— 那是失败隔离的一部分，始终输出。
+OUTPUT_WARNINGS = os.getenv("OUTPUT_WARNINGS", "true").lower() in ("true", "1", "yes")
+
+# 分章输出 output/part/{order}_{title}.md（并行模式）。关掉只是不落这一份
+# 副本，合并后的 _zh.md / _en.md 始终输出。
+OUTPUT_CHAPTERS = os.getenv("OUTPUT_CHAPTERS", "true").lower() in ("true", "1", "yes")
 

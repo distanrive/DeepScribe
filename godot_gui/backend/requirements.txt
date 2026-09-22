@@ -1,0 +1,3 @@
+# Godot 前端的后端服务（godot_gui/backend/main.py）依赖。
+# 只多一个 websockets —— 流水线本身（mineru / openai / PyMuPDF）见项目根 README。
+websockets>=12

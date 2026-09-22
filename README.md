@@ -9,7 +9,7 @@
 | 指标 | 数据 |
 |---|---|
 | 600 页物理教材 | **~30 分钟** |
-| API 费用       | **~¥2**（deepseek-v4-flash）  |
+| API 费用       | **~¥2**（deepseek-flash）  |
 | GPU 要求       | RTX 4060 8 GB / hybrid-engine |
 
 ## 特性
@@ -32,10 +32,10 @@
 ```bash
 conda create -n deepscribe python=3.10
 conda activate deepscribe
-pip install "mineru[all]" openai python-dotenv PyMuPDF PyQt5
+pip install "mineru[all]" openai python-dotenv PyMuPDF websockets
 ```
 
-其中 PyQt5 仅 GUI 使用（PyQt5 为 GPL 许可，故本项目采用 GPL-3.0）
+其中 `websockets` 只给图形界面用（`godot_gui/backend/`）；命令行与翻译流水线本身不需要它。
 
 ### 2. CUDA 版 PyTorch（GPU 用户）
 
@@ -91,34 +91,36 @@ python main.py -i ./input --parse-only     # 仅解析（跳过翻译，输出 _
 
 ## GUI
 
-![Snipaste_2026-08-15_12-56-10](README.assets/Snipaste_2026-08-15_12-56-10.png)
-
-![Snipaste_2026-08-15_12-56-17](README.assets/Snipaste_2026-08-15_12-56-17.png)
-
-图形界面：拖放 PDF、批量处理、实时日志、配置面板（API Key 用 Windows DPAPI 加密存储）。
+**Godot 4 做前端 + Python 做后端**，两者用本地 WebSocket 通信：拖放 PDF / 文件夹、
+批量处理、每章独立状态子行、实时日志、配置面板（API Key 走 Windows DPAPI 加密）。
 
 ```bash
-python -m gui.main                    # 命令行启动
-run_gui_example.bat                  # 复制为 run_gui.bat 后双击启动（无控制台窗口）
+# 用 Godot 4.7 打开 godot_gui/ 目录，按 F5
+run_godot_gui_example.bat            # 复制为 run_godot_gui.bat 改好路径后双击启动
 ```
 
-`run_gui_example.bat` 内容（`%USERPROFILE%` 自动解析当前用户，无需改用户名；`run_gui.bat` 含个人路径，已加入 .gitignore）：
+- **后端不用手动开**：前端连不上会自动按 `godot_gui/project.godot` 的 `[backend]` 段
+  把它拉起来（换机器改那一行的 Python 路径）。
+- 每个 PDF 是**独立子进程**跑流水线，并行模式下文件行下会展开「第 N 章」子行，
+  父行只显示 等待中 / 工作中 / 完成 / 部分失败。
+- 「停止」杀整棵进程树（含 MinerU），不会留下占显存的孤儿进程。
+- 工作页第二行的开关（强制重解析 / 并行翻译 / 仅解析 / 输出warning / 分章输出）
+  只影响**这一次运行**，不写回 `config.json`。
+- 细节与开发约定见 [`godot_gui/README.md`](godot_gui/README.md) 与 `godot_gui/CLAUDE.md`。
 
-```bat
-@echo off
-cd /d "%~dp0"
-start "" "%USERPROFILE%\.conda\envs\deepscribe\pythonw.exe" -m gui.main
-```
+> 历史：早期版本是 PyQt5 界面（`gui/`），已随 Godot 版验收通过而删除。
+> PyQt5 是 GPL 许可、也是本项目此前采用 GPL-3.0 的唯一原因，删掉之后许可证改回了 MIT。
 
 要点：
 - 配置保存在 `config.json`（首次运行自动生成），API Key 经 Windows DPAPI 加密，**不依赖 .env 文件**。
 - 默认值从 `config.py` 读取（CLI/GUI 共用同一份默认配置）。
 - 输出写到 **输入 PDF 所在目录**（`{stem}_zh.md` / `_en.md` / `_zh.assets/`）。
 - 每个文件以**独立子进程**运行流水线，配置即时生效；多文件并发互不干扰。
-- 并行模式下，文件列表显示各章子行（等待中 → 解析中 → 翻译中 → 完成/失败），父行统一显示"等待中/工作中/完成/部分失败"。
+- 并行模式下，文件列表显示各章子行，父行统一显示"等待中/工作中/完成/部分失败"。
 - "停止" 会终止该文件的子进程树（`taskkill /T /F`，包括 MinerU），真正中断任务。
-- 勾选 **"强制重新解析 (MinerU)"** 可忽略缓存重新解析（切换解析后端后需要）。
+- 勾选 **"强制重解析"** 可忽略缓存重新解析（切换解析后端后需要）。
 - 勾选 **"仅解析"** 只跑 MinerU 解析并输出 `{stem}_parsed.md`，跳过翻译（省 API 费用）；启用并行 + 有书签时按章节并发解析。
+- 勾选 **"输出warning"** / **"分章输出"** 控制是否写 `{stem}_warnings.md` 与 `output/part/`（默认都写）。
 - 多文件同时处理时，MinerU 受全局并发限制（`MAX_PARALLEL_MINERU`，默认 1），避免 8 GB 显卡显存 OOM。
 
 ## 配置项
@@ -129,11 +131,11 @@ start "" "%USERPROFILE%\.conda\envs\deepscribe\pythonw.exe" -m gui.main
 |---|---|
 | `DEEPSEEK_API_KEY` | API 密钥 |
 
-### 推荐配置（GPU + deepseek-v4-flash）
+### 推荐配置（GPU + deepseek-flash）
 
 ```bash
 DEEPSEEK_BASE_URL=https://api.deepseek.com
-DEEPSEEK_MODEL=deepseek-v4-flash
+DEEPSEEK_MODEL=deepseek-flash
 MAX_TOKENS=65536
 TRANSLATE_TEMP=0.3
 USE_THINKING=false
@@ -159,7 +161,7 @@ ENABLE_INTEGRITY=true
 
 | 变量 | 说明 | 默认 |
 |---|---|---|
-| `DEEPSEEK_MODEL` | 模型名称 | `deepseek-v4-flash` |
+| `DEEPSEEK_MODEL` | 模型名称（可选 `deepseek-v4-pro`） | `deepseek-flash` |
 | `MAX_TOKENS` | 单次输出上限 | `65536` |
 | `TRANSLATE_TEMP` | 温度 | `0.3` |
 | `TARGET_TOKENS_PER_CALL` | 每次目标 token（输入侧） | `30000` |
@@ -173,6 +175,8 @@ ENABLE_INTEGRITY=true
 | `MAX_PARALLEL_MINERU` | MinerU 并发数（8 GB 显卡建议 1） | `1` |
 | `MAX_CHAPTER_PAGES` | 大章二次拆分阈值（页数），0=禁用 | `100` |
 | `ENABLE_INTEGRITY` | 行内公式/代码校验回填 | `true` |
+| `OUTPUT_WARNINGS` | 写 `{stem}_warnings.md` 告警清单 | `true` |
+| `OUTPUT_CHAPTERS` | 写 `output/part/` 分章副本 | `true` |
 
 ## 输出结构
 
@@ -215,20 +219,20 @@ DeepScribe/
 ├── db.py                # SQLite 断点续传缓存
 ├── bookmark_utils.py    # PDF 书签提取 + 按页拆分
 ├── utils.py             # logging
-├── gui/                 # 图形界面（PyQt5）
-│   ├── main.py          #   GUI 入口
-│   ├── main_window.py   #   侧边栏导航 + 页面切换
-│   ├── workers.py       #   QThread 子进程管理
-│   ├── _runner.py       #   子进程流水线运行器
-│   ├── _gpu_lock.py     #   跨进程 MinerU 槽位锁
-│   ├── config_manager.py#   config.json + DPAPI
-│   ├── styles.py        #   自定义 CSS
-│   └── pages/           #   工作 / 配置 / 关于
-├── setup_env.bat        # 一键配置 conda 环境
-├── run_gui_example.bat # GUI 启动脚本示例（复制为 run_gui.bat，已 gitignore）
+├── dsctl/               # GUI 无关的共享控制层（CLI 与 GUI 后端共用）
+│   ├── config_store.py  #   config.json + DPAPI API Key
+│   ├── gpu_lock.py      #   跨进程 MinerU 槽位锁
+│   └── worker.py        #   单文件流水线子进程入口
+├── godot_gui/           # 图形界面（Godot 4 + Python 后端，当前主力）
+│   ├── project.godot    #   autoload + [backend]（python / script / probe）
+│   ├── scripts/         #   app.gd + pages/ + ui/ + theme/ + autoload/
+│   ├── backend/main.py  #   WebSocket 后端：配置 + 作业管理 + 事件广播
+│   └── tools/           #   协议调试客户端 / stdio 回归 / 表格回归检查（tools/checks/）
+├── setup_env.bat        # 一键配置 conda 环境（mineru + PyTorch CUDA + websockets）
+├── run_godot_gui_example.bat # Godot GUI 启动示例（复制为 run_godot_gui.bat，已 gitignore）
 ├── config.json          # GUI 配置文件（自动生成）
 ├── .env.example         # 环境变量模板
-├── tests/               # 单元测试 (105 用例)
+├── tests/               # 单元测试 (135 用例)
 ├── input/               # 待翻译 PDF
 └── output/              # 输出目录
 ```
@@ -236,10 +240,17 @@ DeepScribe/
 ## 测试
 
 ```bash
-python -m unittest discover -s tests -p "test_*.py" -v   # 105 用例
+python -m unittest discover -s tests -p "test_*.py" -v   # 135 用例
 python -m unittest tests.test_headings -v                # 单模块
 ```
 
+其中 `tests/test_gui_contract.py` 直接读 `godot_gui/` 的 GDScript 源码，钉住几条
+产品要求（不许出现 emoji 图标、模型/推理强度待选项、文案改动、.bat 编码、
+前后端协议常量一致），跑测试即可，不需要开 Godot。
+
 ## License
 
-GPL-3.0（因依赖 GPL 许可的 PyQt5）。其余依赖见 [MinerU](https://github.com/opendatalab/MinerU)（Apache 2.0）。
+**MIT**（见 [LICENSE](LICENSE)）。其余依赖见 [MinerU](https://github.com/opendatalab/MinerU)（Apache 2.0）。
+
+> 早先因为图形界面用 PyQt5（GPL）而采用 GPL-3.0；界面换成 Godot 4（MIT）之后，
+> 2026-09-22 已随旧界面（`gui/`）一起删除并把许可证改回 MIT。

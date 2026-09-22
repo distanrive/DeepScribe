@@ -109,14 +109,33 @@ class TestVerifyBlock(unittest.TestCase):
         self.assertEqual(len(warns), 1)
 
     def test_math_count_mismatch_warns(self):
+        # 数量不一致时不能按序号回填：序号配对只在数量相同时才成立，
+        # 否则每一对都可能错位，回填等于把正确的公式换成另一个。
+        # 这里只告警、不改写（原实现会把 $c$ 换成 $a$）。
         zh, warns = IV.verify_block("$a$ and $b$", "$c$")
         self.assertIn("数量不一致", " ".join(warns))
-        self.assertEqual(zh, "$a$")
+        self.assertIn("跳过回填", " ".join(warns))
+        self.assertEqual(zh, "$c$")
 
     def test_code_count_mismatch_warns(self):
         zh, warns = IV.verify_block("`a` and `b`", "`c`")
         self.assertIn("数量不一致", " ".join(warns))
-        self.assertEqual(zh, "`a`")
+        self.assertIn("跳过回填", " ".join(warns))
+        self.assertEqual(zh, "`c`")
+
+    def test_extra_zh_code_span_not_misaligned(self):
+        # 回归：译文比原文多一个行内代码片段时，按序号配对会把 en 的 `y` 回填到
+        # 译文多出来的 `新` 上，产出「使用 `x`、`y` 和 `y`」——原文那个词消失。
+        # 现在应当只告警、不改写。
+        zh, warns = IV.verify_block("use `x` and `y`", "使用 `x`、`新` 和 `y`")
+        self.assertEqual(zh, "使用 `x`、`新` 和 `y`")
+        self.assertIn("数量不一致", " ".join(warns))
+
+    def test_fewer_zh_spans_keeps_zh_intact(self):
+        # 回归：原文 2 个公式、译文只剩后一个时，旧实现会把 $b$ 换成 $a$。
+        zh, warns = IV.verify_block("$a$ and $b$", "和 $b$")
+        self.assertEqual(zh, "和 $b$")
+        self.assertIn("数量不一致", " ".join(warns))
 
     def test_mixed_math_and_code_backfill(self):
         zh, warns = IV.verify_block("$x$ in `foo`", "$y$ in `bar`")

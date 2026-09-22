@@ -102,11 +102,31 @@ class DeepSeekTranslator:
         base = 10.0 if status == 429 else 5.0
         return base * (2 ** attempt)
 
+    def close(self) -> None:
+        """关闭底层 HTTP 客户端（连接池 / socket）。
+
+        并行模式下**每章**都会建一个 translator（配置常量是模块级的，只能这样
+        隔离），不主动关就得等 GC 才回收 socket 与句柄 —— 几十章的书会一直压着
+        一堆连接。close() 幂等，重复调用无副作用。
+        """
+        try:
+            self.client.close()
+        except Exception as e:      # noqa: BLE001 —— 收尾失败不该盖过真正的异常
+            logger.warning(f"关闭 API 客户端失败: {e}")
+
     def translate_block(self, text: str) -> str:
-        """翻译单个文本块（用于回退）。API 失败时抛出 RuntimeError，交由调用方决定如何处理。"""
+        """翻译单个文本块（用于回退）。API 失败时抛出 RuntimeError，交由调用方决定如何处理。
+
+        空响应同样抛 RuntimeError（而不是返回空串）：单段重译拿到空结果说明这次
+        调用不可用，应当保持「待翻译」状态等下一轮重试，最后由 translate_blocks
+        的失败兜底逻辑用原文顶上并告警 —— 那比在译文里留一段空白可见得多。
+        """
         if not text.strip():
             return text
-        return self._call_api(self._system_prompt, text, timeout=120)
+        zh = self._call_api(self._system_prompt, text, timeout=120)
+        if not zh.strip():
+            raise RuntimeError("API 返回空译文")
+        return zh
 
     def translate_numbered(self, entries: list[tuple[int, str]],
                             label: str = "") -> dict[int, str]:
@@ -150,6 +170,13 @@ class DeepSeekTranslator:
             # L11: 模型重复输出同一 [BLK:N] 标记时，保留首次并告警（原实现后者静默覆盖前者）
             if para_idx in translations:
                 logger.warning(f"段落标记 [BLK:{para_idx}] 重复输出，忽略后一次")
+                continue
+            # 空译文不能当成成功：模型漏写或响应被 max_tokens 截断时，标记后面
+            # 什么都没有。原实现把它存成 '' 并计入「已翻译」，于是这一段在
+            # _zh.md 里变成空白、DB 里被标成 done，连 --force 都不会重译 ——
+            # 原文段落静默消失。这里丢掉它，让它落进 missed 走逐段补译。
+            if not zh_text:
+                logger.warning(f"段落 [BLK:{para_idx}] 译文为空，按遗漏处理并补译")
                 continue
             translations[para_idx] = zh_text
 
