@@ -91,6 +91,10 @@ python main.py -i ./input --parse-only     # 仅解析（跳过翻译，输出 _
 
 ## GUI
 
+![Snipaste_2026-09-22_09-51-11](README.assets/Snipaste_2026-09-22_09-51-11.png)
+
+![Snipaste_2026-09-22_09-51-19](README.assets/Snipaste_2026-09-22_09-51-19.png)
+
 **Godot 4 做前端 + Python 做后端**，两者用本地 WebSocket 通信：拖放 PDF / 文件夹、
 批量处理、每章独立状态子行、实时日志、配置面板（API Key 走 Windows DPAPI 加密）。
 
