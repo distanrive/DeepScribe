@@ -91,9 +91,9 @@ python main.py -i ./input --parse-only     # 仅解析（跳过翻译，输出 _
 
 ## GUI
 
-![Snipaste_2026-09-22_09-51-11](README.assets/Snipaste_2026-09-22_09-51-11.png)
+![工作页：拖放 PDF → 批量起任务 → 逐章状态与实时日志](README.assets/gui_work.png)
 
-![Snipaste_2026-09-22_09-51-19](README.assets/Snipaste_2026-09-22_09-51-19.png)
+![配置页：API / 解析 / 并行 / 高级设置，含缓存占用与清除](README.assets/gui_config.png)
 
 **Godot 4 做前端 + Python 做后端**，两者用本地 WebSocket 通信：拖放 PDF / 文件夹、
 批量处理、每章独立状态子行、实时日志、配置面板（API Key 走 Windows DPAPI 加密）。
@@ -126,6 +126,8 @@ run_godot_gui_example.bat            # 复制为 run_godot_gui.bat 改好路径�
 - 勾选 **"仅解析"** 只跑 MinerU 解析并输出 `{stem}_parsed.md`，跳过翻译（省 API 费用）；启用并行 + 有书签时按章节并发解析。
 - 勾选 **"输出warning"** / **"分章输出"** 控制是否写 `{stem}_warnings.md` 与 `output/part/`（默认都写）。
 - 多文件同时处理时，MinerU 受全局并发限制（`MAX_PARALLEL_MINERU`，默认 1），避免 8 GB 显卡显存 OOM。
+- 配置页「高级配置」显示**缓存占用**（`%TEMP%\DeepScribe` 下的 MinerU 解析产物与断点续传进度）并可一键清除；
+  有任务在跑时会拒绝清除，避免删掉正在写的中间产物。
 
 ## 配置项
 
@@ -226,6 +228,7 @@ DeepScribe/
 ├── dsctl/               # GUI 无关的共享控制层（CLI 与 GUI 后端共用）
 │   ├── config_store.py  #   config.json + DPAPI API Key
 │   ├── gpu_lock.py      #   跨进程 MinerU 槽位锁
+│   ├── cache.py         #   缓存目录定位/统计/清除（%TEMP%\DeepScribe）
 │   └── worker.py        #   单文件流水线子进程入口
 ├── godot_gui/           # 图形界面（Godot 4 + Python 后端，当前主力）
 │   ├── project.godot    #   autoload + [backend]（python / script / probe）
@@ -236,7 +239,7 @@ DeepScribe/
 ├── run_godot_gui_example.bat # Godot GUI 启动示例（复制为 run_godot_gui.bat，已 gitignore）
 ├── config.json          # GUI 配置文件（自动生成）
 ├── .env.example         # 环境变量模板
-├── tests/               # 单元测试 (135 用例)
+├── tests/               # 单元测试 (162 用例)
 ├── input/               # 待翻译 PDF
 └── output/              # 输出目录
 ```
@@ -244,13 +247,13 @@ DeepScribe/
 ## 测试
 
 ```bash
-python -m unittest discover -s tests -p "test_*.py" -v   # 135 用例
+python -m unittest discover -s tests -p "test_*.py" -v   # 162 用例
 python -m unittest tests.test_headings -v                # 单模块
 ```
 
 其中 `tests/test_gui_contract.py` 直接读 `godot_gui/` 的 GDScript 源码，钉住几条
 产品要求（不许出现 emoji 图标、模型/推理强度待选项、文案改动、.bat 编码、
-前后端协议常量一致），跑测试即可，不需要开 Godot。
+前后端协议常量一致、页面请求都挂了连接重试），跑测试即可，不需要开 Godot。
 
 ## License
 
