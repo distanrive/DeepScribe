@@ -40,6 +40,11 @@ var _status: Label
 ## 已保存的模型名（含未知值），用于「自定义…」哨兵项
 var _known_models: PackedStringArray = PackedStringArray()
 var _loading := false
+## 本页刚发过一次 `config_get`，下一个 `config_data` 就是它的回包 ⇒ 强制覆盖表单。
+## 用来区分「自己请求的响应」和「别的窗口保存后广播来的」—— 后者要尊重本页的未保存改动。
+var _awaiting := false
+## 上一次填充表单后的值快照，用来判断「本页有没有未保存的改动」（见 `_is_dirty()`）。
+var _loaded_state := {}
 
 
 func _init() -> void:
@@ -51,7 +56,15 @@ func _ready() -> void:
 	# 建页面时 WebSocket 还没连上（连接是异步的），直接发会被丢弃 —— 连上再取，
 	# 且每次重连都取一次，保证后端重启后表单仍与 config.json 一致。
 	NetClient.connected.connect(_request_config)
+	# **每次切到本页都重新取一次**：多开窗口时配置可能刚被别的前端改过，
+	# 不进本页就看不到。StackedContainer 切页就是改 visible，所以监听这个信号即可。
+	visibility_changed.connect(_on_visibility_changed)
 	_request_config()
+
+
+func _on_visibility_changed() -> void:
+	if visible:
+		_request_config()
 
 
 # ================================================================ 界面
@@ -333,7 +346,38 @@ func _select_combo(combo: OptionButton, value: String) -> void:
 func _request_config() -> void:
 	if not NetClient.is_open():
 		return          # 没连上就别发（NetClient 丢弃并告警），connected 会再触发一次
+	_awaiting = true
 	NetClient.send_command(DsProto.CMD_CONFIG_GET, {})
+
+
+## 本页有没有用户改了但还没保存的内容（拿当前控件值跟上次填充后的快照比）。
+##
+## 存在的意义：后端会把「任何窗口保存的配置」广播给所有前端（多前端同步），
+## 如果本页正被用户编辑着就直接覆盖，用户填了一半的 API Key / 参数会无声消失。
+func _is_dirty() -> bool:
+	return not _loaded_state.is_empty() and _form_state() != _loaded_state
+
+
+## 表单当前值的快照（只放参与保存的那些，`_form_state()` 变了就是「脏」）。
+func _form_state() -> Dictionary:
+	return {
+		"key": _key_edit.text.strip_edges(),
+		"model": _current_model(),
+		"effort": _effort_combo.get_item_text(_effort_combo.selected),
+		"thinking": _thinking_check.button_pressed,
+		"backend": _backend_combo.get_item_text(_backend_combo.selected),
+		"parser_effort": _parser_effort_combo.get_item_text(_parser_effort_combo.selected),
+		"timeout": int(_timeout_spin.value),
+		"workers": int(_workers_spin.value),
+		"mineru": int(_mineru_spin.value),
+		"chapter_pages": int(_chapter_pages_spin.value),
+		"max_tokens": int(_max_tokens_spin.value),
+		"temp": float(_temp_spin.value),
+		"target_tokens": int(_target_tokens_spin.value),
+		"max_paras": int(_max_paras_spin.value),
+		"marker": float(_marker_spin.value),
+		"integrity": _integrity_check.button_pressed,
+	}
 
 
 func _on_backend_message(payload: Variant) -> void:
@@ -342,6 +386,12 @@ func _on_backend_message(payload: Variant) -> void:
 	var msg: Dictionary = payload
 	match str(msg.get("type", "")):
 		DsProto.MSG_CONFIG_DATA:
+			var force := _awaiting          # 自己请求的回包：无条件覆盖
+			_awaiting = false
+			if not force and _is_dirty():
+				_set_status("配置已在其他窗口更新（本页有未保存的改动，未覆盖）",
+						DsProto.STATUS_PARTIAL)
+				return
 			_apply_config(msg)
 		DsProto.MSG_ERROR:
 			_set_status("后端出错：%s" % str(msg.get("message", "")), DsProto.STATUS_ERROR)
@@ -389,6 +439,8 @@ func _apply_config(msg: Dictionary) -> void:
 	_marker_spin.value = float(trans.get("min_marker_retention", 0.95))
 	_integrity_check.button_pressed = bool(trans.get("enable_integrity", true))
 
+	# 记下这一版表单值，作为「有没有未保存改动」的基线（见 _is_dirty）
+	_loaded_state = _form_state()
 	_loading = false
 
 
@@ -434,6 +486,10 @@ func _on_save() -> void:
 		_set_status("模型名不能为空", DsProto.STATUS_ERROR)
 		return
 
+	# 保存会换来后端广播的 config_data（回包）。标成「自己请求的」，否则下面那道
+	# 「有未保存改动就不覆盖」的闸门会把这次回包也挡掉，表单永远停在旧快照上。
+	_awaiting = true
+
 	# 先存 Key（单独一条命令：后端把它 DPAPI 加密后落盘，明文不回传）
 	var key := _key_edit.text.strip_edges()
 	if not key.is_empty():
@@ -474,6 +530,7 @@ func _on_restore() -> void:
 	dlg.ok_button_text = "恢复默认"
 	dlg.cancel_button_text = "取消"
 	dlg.confirmed.connect(func():
+		_awaiting = true        # 后端会用一份 config_data 回这份请求（同 _on_save）
 		NetClient.send_command(DsProto.CMD_CONFIG_RESTORE, {})
 		_set_status("已恢复默认配置", DsProto.STATUS_DONE))
 	# 两个出口都释放，避免反复点「恢复默认」在场景树里堆对话框

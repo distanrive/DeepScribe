@@ -112,6 +112,16 @@ const TABLE_ACTION_SEP := 6.0   # 单元格里多个按钮之间的间距（太�
 const PAD_CELL_BUTTON_H := 8.0
 const PAD_CELL_BUTTON_V := 3.0
 
+# ---------- 滚动条（ScrollBar / ScrollContainer） ----------
+# **滚动条的粗细完全由样式盒的最小尺寸决定**（= content_margin 左+右），所以这一项不能是 0。
+# 它曾经等价于 0（theme_factory 里 _sb 的 pad 默认 0），实测后果是
+# `VScrollBar.get_combined_minimum_size() == (0, 0)`：轨道和滑块都画不出来，
+# ScrollContainer 的滚动条只剩贴着右缘的一条细痕，抓不住也点不中 ——
+# 整个界面的「可滚动」在视觉与交互上都是坏的。
+#
+# 注意这是**全局**粗细：改它会让每个 ScrollContainer 的内容宽度跟着变 12px。
+const SCROLLBAR_W := 12.0
+
 # ---------- 主题常量（theme constants，均为 int） ----------
 const SEP_BOX := 8            # HBox/VBox 子项间距
 const SEP_GRID := 8           # Grid 间距
@@ -122,6 +132,7 @@ const SEP_SEPARATOR := 4      # 分隔线留白
 const SIDEBAR_W := 320.0        # 左侧参数栏宽度
 const PANEL_MIN_H := 220.0      # 主显示区最小高度
 const TOOLBAR_MIN_H := 28.0     # 工具行最小高度
+const LOG_MIN_H := 132.0        # 日志区（LogView）最小高度 —— 约 6~7 行，够看出趋势
 
 # ---------- 导航侧边栏（NavButton / SidebarPanel） ----------
 # DeepScribe 的导航是「整页切换」的窄侧边栏，不是参数栏，所以另给一组宽度。

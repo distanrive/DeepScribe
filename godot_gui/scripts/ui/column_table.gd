@@ -29,16 +29,34 @@ extends Control
 ## 不会互相悬空：uid 只用于查表，某行不存在了就把它的按钮回收掉。
 ##
 ## 注意几点：
-##   * 按钮所在的列**要留够宽度**（三个按钮约 140px 起）。放在最后一列最省事
-##     （最后一列会自动填满剩余宽度）；拖动别的列把它挤窄了，按钮会溢出到相邻列。
+##   * 按钮所在的列**要留够宽度**（三个按钮约 140px 起）。**不要**把按钮列设成
+##     `set_flex_column()` 的那一列 —— flex 列的宽度是算出来的，按钮所在列宽会随窗口
+##     伸缩；固定宽度的列更稳。拖动别的列把它挤窄了，按钮会溢出到相邻列。
 ##   * 点按钮**不会**顺带选中该行（按钮自己消费掉了事件）。想要「点按钮也选中行」，
 ##     在 `cell_action_pressed` 的处理里自己调 `select()`。
 ##   * 按钮是真的节点：几百行 × 每行几个按钮会有可观的开销。行数很多时建议只给
 ##     当前页/可见行配按钮。
 ##
 ## 列宽规则：拖动表头相邻列之间的分隔线调列宽（最小 `TABLE_MIN_COL`）；
-## **最后一列自动填满剩余宽度**，不参与拖拽。颜色从 `_theme_type()` 的类型读取
-## （回退到 ThemePalette 令牌），因此随全局主题统一调整。
+## **默认由最后一列自动填满剩余宽度**，`set_flex_column(i)` 可以把「吸收剩余宽度」
+## 这件事交给别的列（把注释放清楚：吸收的那一列自己不能被直接调宽，它的宽度是算出来的）。
+## 颜色从 `_theme_type()` 的类型读取（回退到 ThemePalette 令牌），因此随全局主题统一调整。
+##
+## ## 拖动分隔线时到底改的是哪一列
+##
+## 这是本文件里唯一容易搞错的地方，**改之前先看这里**。设 flex 列下标为 `f`：
+##
+##   * `line < f`：该线在 flex 列左边，位置 = 左侧各固定列之和 ⇒ 改**左侧**那列（`+delta`）；
+##   * `line >= f`：该线在 flex 列右边（含 flex 自己的右边界），
+##     位置 = 表宽 − 右侧各列之和 ⇒ 改**右侧**那列（`-delta`）。
+##
+## 两种情况下**被拖的那条线都严格跟着鼠标走**，差值由 flex 列吸收。
+## `f == 最后一列`（默认）时第一条规则覆盖所有分隔线，退化成老实现（改左列），逐像素不变。
+##
+## 反例（务必别退回去）：曾经想当然地写成「永远改左边那列」。flex 在中间或最左时，
+## 例如 `f = 0`、三列，此时 `sep(1) = 表宽 − w₂` 跟 `w₁` **无关** —— 用户抓住
+## 「状态|操作」那条线拖，`w₁` 确实在变，但那条线纹丝不动、反而是隔壁那条在跑。
+## 表现就是「抓住的线不跟手」。
 
 ## 单元格按钮被点击：`uid` 是行标识（见 `set_row_actions`），`index` 是该行第几个按钮，
 ## `action` 是按钮的 `action` 字段（没写就是按钮文字）。
@@ -49,7 +67,12 @@ const _HIT := 6.0        # 分隔线命中范围（px）
 var _titles: PackedStringArray = []
 var _widths: PackedFloat32Array = []
 
-var _drag_col := -1       # 正在拖拽的分隔线左侧列索引
+## 吸收剩余宽度的那一列：`-1` = 最后一列（默认，与历史行为一致）。
+var _flex_col := -1
+
+var _drag_col := -1       # 正在拖拽的分隔线索引（= 该线左侧那一列的下标）
+var _drag_target := -1    # 这次拖拽实际改的是哪一列（见文件头「拖动分隔线…」）
+var _drag_dir := 1.0      # delta → 宽度的符号
 var _drag_start_x := 0.0
 var _drag_start_w := 0.0
 
@@ -74,15 +97,38 @@ func get_columns() -> PackedStringArray:
 	return _titles
 
 
-## 列 i 的实际绘制宽度（最后一列自动填满剩余宽度）。
+## 设置「吸收剩余宽度」的那一列（0 基）。传 `-1` 恢复成默认的最后一列。
+##
+## 例：`work_page` 用它让「文件名」列吸收剩余宽度，状态/操作保持小固定宽度 ——
+## 否则窗口一宽，最后一列的「操作」就会变成几百像素宽的空档。
+##
+## 注意 flex 列的宽度是**算出来的**，它自己那条分隔线拖出来的效果是改相邻的固定列
+## （见文件头「拖动分隔线时到底改的是哪一列」）。
+func set_flex_column(index: int) -> void:
+	_flex_col = index
+	_on_widths_changed()
+
+
+## 实际生效的 flex 列下标。越界时回退到最后一列 —— 必须保证「总有且只有一列」吸收剩余
+## 宽度，否则列宽之和会小于表宽、表格右侧留一条空白（静默的难看，不报错）。
+func _flex_index() -> int:
+	if _widths.is_empty():
+		return -1
+	if _flex_col < 0:
+		return _widths.size() - 1
+	return mini(_flex_col, _widths.size() - 1)
+
+
+## 列 i 的实际绘制宽度（flex 列 = 表宽减去其余各列的固定宽度）。
 func _col_w(i: int) -> float:
 	if _widths.is_empty():
 		return 0.0
-	if i == _widths.size() - 1:
-		# 最后一列填满剩余宽度（至少留 TABLE_MIN_COL），避免被其它列挤到溢出台面
+	if i == _flex_index():
+		# 至少留 TABLE_MIN_COL，避免被其它列挤到溢出台面
 		var used := 0.0
-		for k in range(_widths.size() - 1):
-			used += _widths[k]
+		for k in range(_widths.size()):
+			if k != i:
+				used += _widths[k]
 		return maxf(size.x - used, ThemePalette.TABLE_MIN_COL)
 	return _widths[i]
 
@@ -95,7 +141,10 @@ func _sep_x(i: int) -> float:
 	return x
 
 
-## 返回命中的分隔线左侧列索引，未命中返回 -1（最后一列不参与拖拽）。
+## 返回命中的分隔线索引（= 该线左侧那一列的下标），未命中返回 -1。
+##
+## 表格右缘（`sep(最后一列)`）不算分隔线：它是控件的边界，没有「拖它」这回事
+## —— 循环天然只到 `_widths.size() - 2`。
 func _hit_sep(mx: float) -> int:
 	var best := -1
 	var best_d := _HIT
@@ -305,8 +354,11 @@ func _gui_input(event: InputEvent) -> void:
 			if event.position.y <= ThemePalette.TABLE_HEADER_H:
 				_drag_col = _hit_sep(event.position.x)
 				if _drag_col >= 0:
+					# 起拖时就把「这次要改哪一列、往哪个方向」定下来（见文件头）
+					_drag_target = _drag_col if _drag_col < _flex_index() else _drag_col + 1
+					_drag_dir = 1.0 if _drag_col < _flex_index() else -1.0
 					_drag_start_x = event.position.x
-					_drag_start_w = _widths[_drag_col]
+					_drag_start_w = _widths[_drag_target]
 					accept_event()
 					return
 		elif _drag_col >= 0:
@@ -315,15 +367,20 @@ func _gui_input(event: InputEvent) -> void:
 			return
 		_on_body_input(event)
 	elif event is InputEventMouseMotion and _drag_col >= 0:
-		# 拖拽列宽上下限：≥ TABLE_MIN_COL，且不能把其它列挤到连最后一列都放不下
+		# 拖拽列宽上下限：被拖的那列 ≥ TABLE_MIN_COL，且不能把 flex 列挤到放不下。
+		# `other` = 除 flex 列与被拖列之外所有固定列之和 ⇒
+		# hi 就是「flex 列恰好等于 TABLE_MIN_COL」时被拖列的值。
 		var other := 0.0
-		for k in range(_widths.size() - 1):
-			if k != _drag_col:
+		for k in range(_widths.size()):
+			if k != _flex_index() and k != _drag_target:
 				other += _widths[k]
 		var lo := ThemePalette.TABLE_MIN_COL
 		var hi := maxf(size.x - other - ThemePalette.TABLE_MIN_COL, lo)
-		_widths[_drag_col] = clampf(_drag_start_w + (event.position.x - _drag_start_x), lo, hi)
-		# 列宽变了 ⇒ 按钮该在的位置也变了（最后一列的宽度是「剩余宽度」，所以拖任何一条
+		# 显式标类型：`event` 的静态类型是 InputEvent，`:=` 推不出 float（GDScript 不会
+		# 因为上面那句 `is InputEventMouseMotion` 就收窄类型）
+		var delta: float = event.position.x - _drag_start_x
+		_widths[_drag_target] = clampf(_drag_start_w + _drag_dir * delta, lo, hi)
+		# 列宽变了 ⇒ 按钮该在的位置也变了（flex 列的宽度是「剩余宽度」，所以拖任何一条
 		# 分隔线都会挪到它），所以这里不能只 queue_redraw()。
 		_on_widths_changed()
 		accept_event()

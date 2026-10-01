@@ -138,6 +138,88 @@ class TestRenamedLabels(unittest.TestCase):
         self.assertNotIn("PyQt5", src)
 
 
+class TestWorkPageDetails(unittest.TestCase):
+    """工作页的几条硬性要求（靠读源码钉住，不必开 Godot）。"""
+
+    def setUp(self):
+        self.src = read("scripts/pages/work_page.gd")
+
+    def test_start_all_is_green(self):
+        # 「全部开始」要和行内那个绿色的「开始」同色系
+        self.assertIn('_make_button("全部开始", "SuccessButton"', self.src)
+
+    def test_chapters_follow_parallel(self):
+        # 「并行翻译」没勾时「分章输出」必须不可选：串行模式没有分章这一步。
+        self.assertIn("_chk_parallel.toggled.connect", self.src)
+        self.assertIn("_chk_chapters.disabled = not parallel", self.src)
+
+    def test_rows_have_per_file_options(self):
+        # 右键菜单改的是**单个文件**的运行选项，执行时要按行取，而不是读全局勾选框。
+        self.assertIn("_effective_opts(path)", self.src)
+        self.assertIn("set_flex_column", self.src)
+
+    def test_log_uses_template_log_view(self):
+        # 日志改用模板控件后，自己那套「_[lb]转义 + 手工裁剪」必须一起删掉，
+        # 否则二次转义会把 [BLK:0] 渲染成字面的 [lb]BLK:0]。
+        self.assertIn("LogView.new()", self.src)
+        self.assertNotIn("func _esc(", self.src)
+        self.assertNotIn("append_text", self.src)
+
+
+class TestAboutPageNoBullets(unittest.TestCase):
+    """关于页每行前面不再顶一个「·」。"""
+
+    def test_no_leading_dot(self):
+        src = read("scripts/pages/about_page.gd")
+        self.assertNotIn('"· " +', src)
+
+
+class TestScrollBarTheme(unittest.TestCase):
+    """滚动条必须真的画得出来。
+
+    `ScrollBar` 的粗细就是样式盒的最小尺寸（content_margin 之和）；给 0 的话
+    `VScrollBar.get_combined_minimum_size()` 是 `(0, 0)`，整条滚动条只剩贴着右缘
+    一条抓不住的细痕（这个 bug 上游与 DeepScribe 都踩过，别再退回去）。
+    """
+
+    def test_token_exists(self):
+        self.assertIn("SCROLLBAR_W", read("scripts/theme/theme_palette.gd"))
+
+    def test_styleboxes_have_padding(self):
+        src = read("scripts/theme/theme_factory.gd")
+        for name in ["scroll", "scroll_focus", "grabber", "grabber_highlight", "grabber_pressed"]:
+            self.assertIn(f'"{name}", "ScrollBar"', src,
+                          f"ScrollBar 少了 {name} 样式盒")
+
+    def test_log_view_colors_registered(self):
+        src = read("scripts/theme/theme_factory.gd")
+        for name in ["info_color", "ok_color", "warn_color", "error_color", "debug_color"]:
+            self.assertIn(f'"{name}", "LogView"', src)
+
+
+class TestMultiFrontendContract(unittest.TestCase):
+    """多前端：在线数广播 + 只有最后一个前端才收后端进程。"""
+
+    def test_backend_broadcasts_client_count(self):
+        backend = (GUI / "backend" / "main.py").read_text(encoding="utf-8")
+        self.assertIn('"type": "clients"', backend)
+        self.assertIn('"clients": self.hub.count', backend)
+
+    def test_launcher_respects_last_client(self):
+        src = read("scripts/autoload/backend_launcher.gd")
+        self.assertIn("_clients > 1", src)
+        self.assertIn('"--exit-with-last-client"', src)
+
+
+class TestNoSlotWaitNoise(unittest.TestCase):
+    """日志里不再报「等待 MinerU 槽位多久」。"""
+
+    def test_no_slot_wait_warning(self):
+        path = Path(__file__).resolve().parent.parent / "dsctl" / "gpu_lock.py"
+        src = path.read_text(encoding="utf-8")
+        self.assertNotIn("等待 MinerU 槽位", src)
+
+
 class TestBatEncoding(unittest.TestCase):
     """`.bat` 必须是 **GBK + CRLF + 无 BOM**。
 

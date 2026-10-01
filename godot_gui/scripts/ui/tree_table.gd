@@ -31,6 +31,11 @@ signal item_activated(item: TreeTableItem)
 ## 某一行被展开/收起。
 signal item_toggled(item: TreeTableItem, expanded: bool)
 
+## 在某一行上按了右键（`at_position` 是**表格自身坐标**，直接喂给
+## `PopupMenu.popup_on_parent()` 即可 —— 把菜单挂在表格底下就不用做坐标换算）。
+## 落在表头/空白处的右键不发这个信号。
+signal item_context_menu(item: TreeTableItem, at_position: Vector2)
+
 var _root: TreeTableItem = null
 var _selected: TreeTableItem = null
 var _hovered: TreeTableItem = null
@@ -341,6 +346,15 @@ func _indent_level(item: TreeTableItem) -> int:
 
 
 func _on_body_input(event: InputEvent) -> void:
+	# 右键：只对「打在某一行上」的情况发信号。顺带把该行选中，让用户看清菜单改的是哪一行。
+	# 非左键的事件本来就会落到这个钩子（见 ColumnTable._gui_input 的 else 分支）。
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
+		var hit := _row_at(event.position)
+		if hit >= 0:
+			select(_visible[hit])
+			item_context_menu.emit(_visible[hit], event.position)
+			accept_event()
+		return
 	if event is InputEventMouseMotion:
 		var i := _row_at(event.position)
 		var item := _visible[i] if i >= 0 else null

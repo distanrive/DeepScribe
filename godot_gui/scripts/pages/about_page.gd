@@ -117,9 +117,11 @@ func _add_section(parent: VBoxContainer, heading: String, lines: Array) -> void:
 	h.text = heading
 	h.theme_type_variation = "CardTitle"
 	parent.add_child(h)
+	# 行首不加项目符号：这些条目本身是完整句子，前面顶一个点只是噪声
+	# （标题已经把它们分成一组了）。行与行的区分靠 SEP 间距，够用。
 	for line in lines:
 		var l := Label.new()
-		l.text = "· " + str(line)
+		l.text = str(line)
 		l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		parent.add_child(l)
 

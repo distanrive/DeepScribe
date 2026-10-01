@@ -24,8 +24,88 @@ func _initialize() -> void:
 	await _check_drag_relayouts_buttons()
 	_check_tree_actions()
 	await _check_data_table_actions()
+	_check_flex_column_layout()
+	await _check_flex_column_drag()
 	print("[check] %s" % ("PASS" if _fails == 0 else "FAIL（%d 项）" % _fails))
 	quit(_fails)
+
+
+## `set_flex_column()`：指定的那一列吸收剩余宽度，其余列保持固定宽度。
+func _check_flex_column_layout() -> void:
+	var table := _flex_table()
+	_check_row(table)
+	var w := table.size.x
+	_ok(w > 400.0, "表格宽度足够跑检查（实际 %.0f）" % w)
+	_eq(w - 278.0, table._col_w(0), 0.5, "文件名列（flex）= 表宽 − 100 − 178")
+	_eq(100.0, table._col_w(1), 1e-4, "状态列保持固定宽度")
+	_eq(178.0, table._col_w(2), 1e-4, "操作列保持固定宽度")
+	table.free()
+
+
+## 拖拽分隔线的语义：**被拖的那条线必须严格跟手**，差值由 flex 列吸收。
+##
+## 这是本控件最容易写错的地方：flex 列不在最右边时，`sep(i)`（i ≥ flex）的 x 由
+## 表宽和**右边**各列决定，跟左边那列无关 —— 「永远改左边那列」的写法会让用户
+## 抓住的那条线纹丝不动、反而是隔壁那条在跑。
+func _check_flex_column_drag() -> void:
+	var table := _flex_table()
+	_check_row(table)
+	var w := table.size.x
+
+	# 第一条线「文件名|状态」右移 40：flex 列（文件名）变宽、状态列被压窄 —— 线严格跟手
+	var sep0 := table._sep_x(0)
+	_press(table, Vector2(sep0, 10.0))
+	_move(table, Vector2(sep0 + 40.0, 10.0))
+	await process_frame
+	_eq(table._sep_x(0), sep0 + 40.0, 1.0, "拖「文件名|状态」右移 40：线严格跟手")
+	_eq(table._col_w(1), 60.0, 1.0, "……状态列被压窄 40")
+	_eq(table._col_w(0), w - 60.0 - 178.0, 1.0, "……文件名列（flex）吸收差值")
+	_release(table, Vector2(sep0 + 40.0, 10.0))
+
+	# 第二条线「状态|操作」左移 30：线同样跟手（操作变宽、文件名变窄）
+	var sep1 := table._sep_x(1)
+	_press(table, Vector2(sep1, 10.0))
+	_move(table, Vector2(sep1 - 30.0, 10.0))
+	await process_frame
+	_eq(table._sep_x(1), sep1 - 30.0, 1.0, "拖「状态|操作」左移 30：线严格跟手")
+	_eq(table._col_w(2), 208.0, 1.0, "……操作列变宽 30")
+	_release(table, Vector2(sep1 - 30.0, 10.0))
+
+	# 拖到极限：被拖的那列停在最小列宽，flex 列也不会被挤穿
+	var sep0b := table._sep_x(0)
+	_press(table, Vector2(sep0b, 10.0))
+	_move(table, Vector2(sep0b + 5000.0, 10.0))
+	await process_frame
+	_eq(table._col_w(1), ThemePalette.TABLE_MIN_COL, 1.0, "拖到极限：被拖的列停在最小列宽")
+	_ok(table._col_w(0) >= ThemePalette.TABLE_MIN_COL - 0.5, "此时 flex 列仍不小于最小列宽")
+	_release(table, Vector2(sep0b + 5000.0, 10.0))
+
+	# 反方向：把「状态|操作」往左拉到极限，缩的是 flex 列 —— 它必须停在下限（不能变负）
+	var sep1b := table._sep_x(1)
+	_press(table, Vector2(sep1b, 10.0))
+	_move(table, Vector2(sep1b - 5000.0, 10.0))
+	await process_frame
+	_eq(table._col_w(0), ThemePalette.TABLE_MIN_COL, 1.0, "缩到极限：flex 列停在最小列宽")
+	table.free()
+
+
+## 三列、flex 在最左的表格（宽度固定，免得期望值依赖布局系统）。
+func _flex_table() -> DataTable:
+	var table := DataTable.new()
+	table.set_columns(PackedStringArray(["文件名", "状态", "操作"]),
+			PackedFloat32Array([0.0, 100.0, 178.0]))
+	table.set_flex_column(0)
+	table.set_min_width(580.0)
+	root.add_child(table)
+	table.size = Vector2(700.0, 90.0)
+	return table
+
+
+## 行数与高度对上（顺带确认 flex 列没把最小尺寸契约搞坏）。
+func _check_row(table: DataTable) -> void:
+	table.set_rows([["a.pdf", "等待中", ""], ["b.pdf", "完成", ""]])
+	_eq(ThemePalette.TABLE_HEADER_H + ThemePalette.TABLE_ROW_H * 2.0,
+			table.get_required_height(), 1e-4, "高度仍由「表头 + 行数 × 行高」决定")
 
 
 ## 拖拽列宽 → 按钮必须跟着走（回归：这条曾经是坏的）
@@ -164,6 +244,16 @@ func _press(c: Control, at: Vector2) -> void:
 
 func _move(c: Control, at: Vector2) -> void:
 	var e := InputEventMouseMotion.new()
+	e.position = at
+	c._gui_input(e)
+
+
+## 松手。**两次拖拽之间必须松手** —— `_drag_col` 不清零的话第二次 `_press` 会被
+## 当成「拖拽中途又按下」，第二次拖动根本没起来。
+func _release(c: Control, at: Vector2) -> void:
+	var e := InputEventMouseButton.new()
+	e.button_index = MOUSE_BUTTON_LEFT
+	e.pressed = false
 	e.position = at
 	c._gui_input(e)
 

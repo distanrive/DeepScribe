@@ -25,6 +25,8 @@ const MSG_JOB_STATUS := "job_status"
 const MSG_CHAPTER_STATUS := "chapter_status"
 const MSG_LOG := "log"
 const MSG_JOB_FINISHED := "job_finished"
+## 在线前端数（后端每次连接/断开都广播；前端据此判断「我退出时能不能收掉后端进程」）
+const MSG_CLIENTS := "clients"
 
 # ---------- 状态 ----------
 # 与 main.py 的 progress_callback 取值一一对应（只有这 5 个来自后端）：
