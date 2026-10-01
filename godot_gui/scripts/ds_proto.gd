@@ -14,6 +14,8 @@ const CMD_JOB_START := "job_start"
 const CMD_JOB_STOP := "job_stop"
 const CMD_JOB_STOP_ALL := "job_stop_all"
 const CMD_ENV_PROBE := "env_probe"
+const CMD_CACHE_INFO := "cache_info"
+const CMD_CACHE_CLEAR := "cache_clear"
 
 # ---------- 后端 → 前端 ----------
 const MSG_HELLO_ACK := "hello_ack"
@@ -21,6 +23,8 @@ const MSG_ACK := "ack"
 const MSG_ERROR := "error"
 const MSG_CONFIG_DATA := "config_data"
 const MSG_ENV_INFO := "env_info"
+## 缓存占用（`cache_info` 与 `cache_clear` 都用它回包；清完后多带 `freed` / `errors`）
+const MSG_CACHE_INFO := "cache_info"
 const MSG_JOB_STATUS := "job_status"
 const MSG_CHAPTER_STATUS := "chapter_status"
 const MSG_LOG := "log"

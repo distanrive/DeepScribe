@@ -35,6 +35,8 @@ var _target_tokens_spin: SpinBox
 var _max_paras_spin: SpinBox
 var _marker_spin: SpinBox
 var _integrity_check: CheckBox
+var _cache_label: Label
+var _cache_clear_button: Button
 var _status: Label
 
 ## 已保存的模型名（含未知值），用于「自定义…」哨兵项
@@ -56,15 +58,21 @@ func _ready() -> void:
 	# 建页面时 WebSocket 还没连上（连接是异步的），直接发会被丢弃 —— 连上再取，
 	# 且每次重连都取一次，保证后端重启后表单仍与 config.json 一致。
 	NetClient.connected.connect(_request_config)
+	NetClient.connected.connect(_request_cache_info)
+	# 缓存占用也要跟着重连再取一次：本页可见时才发请求，而后端可能是在本页
+	# 已经可见之后才连上的（启动顺序 / 后端重启）—— 只靠 visibility_changed
+	# 会让那一次请求被 `is_open()` 挡掉，于是永远停在「正在统计…」。
 	# **每次切到本页都重新取一次**：多开窗口时配置可能刚被别的前端改过，
 	# 不进本页就看不到。StackedContainer 切页就是改 visible，所以监听这个信号即可。
 	visibility_changed.connect(_on_visibility_changed)
 	_request_config()
+	_request_cache_info()
 
 
 func _on_visibility_changed() -> void:
 	if visible:
 		_request_config()
+		_request_cache_info()
 
 
 # ================================================================ 界面
@@ -286,7 +294,35 @@ func _build_advanced_group() -> TitledGroup:
 	row2.add_child(_stretch())
 	box.add_child(row2)
 
+	box.add_child(_build_cache_row())
 	return g
+
+
+## 缓存占用 + 清除按钮。
+##
+## 清掉的是 %TEMP%\DeepScribe 下的中间产物（MinerU 解析输出、断点续传 DB、拆章 PDF…）——
+## 都**可以重新生成**，代价是重跑一遍解析/翻译（翻译要花 API 钱）。路径与统计口径
+## 全在 Python 侧的 `dsctl/cache.py`，前端不拼路径。
+func _build_cache_row() -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.add_child(_label("缓存"))
+
+	_cache_label = Label.new()
+	_cache_label.theme_type_variation = "Caption"
+	_cache_label.text = "未连接后端"
+	_cache_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	row.add_child(_cache_label)
+
+	row.add_child(_gap(20))
+	_cache_clear_button = Button.new()
+	_cache_clear_button.text = "清除缓存"
+	_cache_clear_button.theme_type_variation = "GhostButton"
+	_cache_clear_button.disabled = true
+	_cache_clear_button.tooltip_text = "删除中间产物缓存（解析结果、断点续传进度）"
+	_cache_clear_button.pressed.connect(_on_clear_cache)
+	row.add_child(_cache_clear_button)
+	row.add_child(_stretch())
+	return row
 
 
 # ================================================================ 控件工厂
@@ -350,6 +386,18 @@ func _request_config() -> void:
 	NetClient.send_command(DsProto.CMD_CONFIG_GET, {})
 
 
+## 要一份缓存占用。统计要遍历上千个文件，后端放在线程池里做，不会卡住它自己。
+func _request_cache_info() -> void:
+	if not NetClient.is_open():
+		# **说清楚在等什么**：后端还没连上时（启动后一两秒内点进来就会碰上），
+		# 这一刻连请求都还没发出去，写「正在统计…」会让人以为统计慢。
+		# `connected` 信号里会再调一次，连上后数字自己就来了。
+		_cache_label.text = "未连接后端"
+		_cache_clear_button.disabled = true
+		return
+	NetClient.send_command(DsProto.CMD_CACHE_INFO, {})
+
+
 ## 本页有没有用户改了但还没保存的内容（拿当前控件值跟上次填充后的快照比）。
 ##
 ## 存在的意义：后端会把「任何窗口保存的配置」广播给所有前端（多前端同步），
@@ -393,8 +441,56 @@ func _on_backend_message(payload: Variant) -> void:
 						DsProto.STATUS_PARTIAL)
 				return
 			_apply_config(msg)
+		DsProto.MSG_CACHE_INFO:
+			_apply_cache_info(msg)
+		DsProto.MSG_JOB_FINISHED:
+			# 任务跑完会往缓存里写不少东西，本页开着的话顺手刷新一下数字
+			_request_cache_info()
 		DsProto.MSG_ERROR:
 			_set_status("后端出错：%s" % str(msg.get("message", "")), DsProto.STATUS_ERROR)
+
+
+func _apply_cache_info(msg: Dictionary) -> void:
+	var n := int(msg.get("bytes", 0))
+	var files := int(msg.get("files", 0))
+	_cache_label.text = "%s（%d 个文件）" % [_fmt_bytes(n), files]
+	_cache_label.tooltip_text = "%s\n可随时清除：里面的解析结果与断点续传进度都能重新生成" \
+			% str(msg.get("path", ""))
+
+	# 有任务在跑时后端会拒绝清除，这里就把按钮置灰，别让用户白点一下
+	# （`busy` 是上一次查询时的快照；期间新起的任务由后端那道 CommandError 兜住）
+	var busy := bool(msg.get("busy", false))
+	if busy:
+		_cache_clear_button.disabled = true
+		_cache_clear_button.tooltip_text = "有任务正在运行，跑完或停止后才能清除缓存"
+	elif n == 0:
+		_cache_clear_button.disabled = true
+		_cache_clear_button.tooltip_text = "缓存已经是空的"
+	else:
+		_cache_clear_button.disabled = false
+		_cache_clear_button.tooltip_text = "删除中间产物缓存（解析结果、断点续传进度）"
+
+	# 这是刚清完的回包：把结果说清楚（包括「有几项没删掉」）
+	if msg.has("freed"):
+		var errors: Array = msg.get("errors", [])
+		if errors.is_empty():
+			_set_status("已清除缓存，释放 %s" % _fmt_bytes(int(msg["freed"])),
+					DsProto.STATUS_DONE)
+		else:
+			_set_status("已释放 %s，但有 %d 项没删掉（多半是被占用）：%s"
+					% [_fmt_bytes(int(msg["freed"])), errors.size(), str(errors[0])],
+					DsProto.STATUS_PARTIAL)
+
+
+## 字节数 → 人读得懂的大小。`Fmt.num()` 对大数会转科学计数法（1.96e8），不适合当体积显示。
+func _fmt_bytes(n: int) -> String:
+	var units := ["B", "KB", "MB", "GB", "TB"]
+	var v := float(n)
+	var i := 0
+	while v >= 1024.0 and i < units.size() - 1:
+		v /= 1024.0
+		i += 1
+	return ("%d %s" % [n, units[0]]) if i == 0 else ("%.1f %s" % [v, units[i]])
 
 
 func _apply_config(msg: Dictionary) -> void:
@@ -521,6 +617,31 @@ func _on_save() -> void:
 		},
 	}})
 	_set_status("配置已保存", DsProto.STATUS_DONE)
+
+
+## 清除缓存。**先确认再动手**：删掉断点续传 DB 意味着下次要重新调用 API 翻译（花钱），
+## 这不是一个「点错了也没关系」的按钮。
+func _on_clear_cache() -> void:
+	var dlg := ConfirmationDialog.new()
+	dlg.title = "清除缓存"
+	dlg.dialog_text = ("将删除缓存目录里的全部中间产物：\n"
+			+ "    · MinerU 解析结果（md + 图片）\n"
+			+ "    · 翻译断点续传进度（删了要重新调用 API 翻译，会产生费用）\n"
+			+ "    · 拆章 PDF、合并阶段图片等临时文件\n\n"
+			+ "已输出的 {文件名}_zh.md / _en.md 不受影响。\n\n确定要清除吗？")
+	dlg.ok_button_text = "清除"
+	dlg.cancel_button_text = "取消"
+	dlg.confirmed.connect(func():
+		# 标签与按钮立刻进「进行中」：删除几千个文件要花时间（Windows 上还有杀软
+		# 实时扫描），期间界面必须看得出在干活，也得挡住重复点击发出的第二次清除。
+		_cache_label.text = "正在清除…"
+		_cache_clear_button.disabled = true
+		NetClient.send_command(DsProto.CMD_CACHE_CLEAR, {})
+		_set_status("正在清除缓存…", DsProto.STATUS_TRANSLATING))
+	dlg.confirmed.connect(dlg.queue_free)
+	dlg.canceled.connect(dlg.queue_free)
+	add_child(dlg)
+	dlg.popup_centered()
 
 
 func _on_restore() -> void:

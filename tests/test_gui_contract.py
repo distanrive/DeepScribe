@@ -197,6 +197,48 @@ class TestScrollBarTheme(unittest.TestCase):
             self.assertIn(f'"{name}", "LogView"', src)
 
 
+class TestPageRequestsRetryOnConnect(unittest.TestCase):
+    """页面自己发起的请求必须挂到 `NetClient.connected` 上重试。
+
+    为什么这是**产品要求**而不是实现细节：后端是前端自己拉起来的，要 1~3 秒才就绪；
+    而每个发命令的地方都要先 `if not NetClient.is_open(): return`。两者一叠加，
+    **启动后一两秒内发出的那一次必然被丢掉** —— 只靠 `_ready()` 里调一次是不够的，
+    必须让 `connected` 每次（重）连再发一遍。
+
+    漏挂的症状是「界面某一行永远停在占位文字」，而且**不报任何错**：配置页的缓存占用
+    就漏过一次（`_request_cache_info`），表现出来是「切到配置页要等好几秒才出数字」，
+    实际是请求压根没发出去。
+
+    约定：这类函数命名以 `_request*` / `_sync*` 开头。若某个确实不该在重连时重发，
+    换个名字（测试只看这两类前缀）。
+    """
+
+    def _functions(self, src: str) -> dict[str, str]:
+        """粗切函数块：按顶格的 `func ` 切分（GDScript 的函数体一律缩进）。"""
+        out = {}
+        for part in re.split(r"\n(?=func )", src):
+            m = re.match(r"func (\w+)\(", part)
+            if m:
+                out[m.group(1)] = part
+        return out
+
+    def test_every_request_helper_is_reconnected(self):
+        offenders = []
+        for path in sorted((SCRIPTS / "pages").glob("*.gd")):
+            src = path.read_text(encoding="utf-8")
+            connected = set(re.findall(r"NetClient\.connected\.connect\((\w+)\)", src))
+            for name, body in self._functions(src).items():
+                if not re.fullmatch(r"_(request|sync)\w*", name):
+                    continue
+                if "send_command(" not in body or name in connected:
+                    continue
+                offenders.append(f"{path.name}::{name}()")
+        self.assertEqual(
+            offenders, [],
+            "这些函数会发命令、但没挂到 NetClient.connected 上 —— 启动早期那一次请求"
+            "会被静默丢掉（不报错，界面只停占位文字）：\n  " + "\n  ".join(offenders))
+
+
 class TestMultiFrontendContract(unittest.TestCase):
     """多前端：在线数广播 + 只有最后一个前端才收后端进程。"""
 

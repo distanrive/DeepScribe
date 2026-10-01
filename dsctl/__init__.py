@@ -4,6 +4,7 @@ CLI 与 Godot GUI 的后端共用这里的实现：
 
 - `config_store` —— config.json 读写 + Windows DPAPI 加密 API Key
 - `gpu_lock`     —— 跨进程 MinerU 槽位锁（GPU 显存保护）
+- `cache`        —— 缓存目录（临时目录下的 DeepScribe/）的定位、统计与清除
 - `worker`       —— 单文件流水线子进程入口（stdout 上回传进度标记）
 
 这一层**不导入任何 GUI 框架** —— 后端是要拿 `websockets` 跑的，

@@ -16,7 +16,6 @@ import json
 import logging
 import os
 import sys
-import tempfile
 import time
 import traceback
 from pathlib import Path
@@ -72,8 +71,9 @@ def _make_mineru_lock():
         count = int(os.environ.get("MAX_PARALLEL_MINERU", "1"))
     except ValueError:
         count = 1
-    slots_dir = Path(tempfile.gettempdir()) / "DeepScribe" / "mineru_slots"
-    pool = MineruSlotPool(slots_dir, count)
+    # 槽位目录落在缓存根下（同一处定义，见 dsctl/cache.py），但**不参与「清除缓存」**
+    from dsctl.cache import CACHE_ROOT, SLOTS_DIRNAME
+    pool = MineruSlotPool(CACHE_ROOT / SLOTS_DIRNAME, count)
     return pool.acquire
 
 

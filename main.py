@@ -3,7 +3,6 @@ import hashlib
 import os
 import re
 import shutil
-import tempfile
 from contextlib import nullcontext
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -22,11 +21,13 @@ from integrity import verify_block
 from bookmark_utils import (
     extract_bookmarks, split_pdf_by_bookmarks,
 )
+from dsctl.cache import CACHE_ROOT
 
 logger = setup_logger(__name__)
 
-# 临时文件目录（中间产物统一存放）
-_TEMP_ROOT = Path(tempfile.gettempdir()) / "DeepScribe"
+# 中间产物统一存放的临时目录。路径定义在 `dsctl/cache.py`（GUI 的「清除缓存」也用它，
+# 两处不能各写一份 —— 见那个模块的文档串）。
+_TEMP_ROOT = CACHE_ROOT
 
 # ---------- text normalization ----------
 

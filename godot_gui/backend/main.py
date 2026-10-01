@@ -138,6 +138,7 @@ _STDIO_TAKEN_OVER = _redirect_stdio_early(_LOG_PATH)
 import argparse  # noqa: E402
 import asyncio  # noqa: E402
 import datetime  # noqa: E402
+import functools  # noqa: E402
 import json  # noqa: E402
 import re  # noqa: E402
 import subprocess  # noqa: E402
@@ -151,6 +152,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from dsctl.cache import CACHE_ROOT, cache_size, clear_cache  # noqa: E402
 from dsctl.config_store import ConfigManager  # noqa: E402
 from dsctl.worker import PROGRESS_PREFIX  # noqa: E402
 
@@ -358,6 +360,11 @@ class JobManager:
     def is_running(self, path: str) -> bool:
         job = self._jobs.get(path)
         return job is not None and job.proc.returncode is None
+
+    @property
+    def running_count(self) -> int:
+        """正在跑的子进程数（用来拦住「跑着的时候清缓存」）。"""
+        return sum(1 for job in self._jobs.values() if job.proc.returncode is None)
 
     # ---------- 启动 ----------
 
@@ -638,13 +645,65 @@ class Session:
         elif cmd == "env_probe":
             await self.send({"type": "env_info", **await _probe_env()})
 
+        elif cmd == "cache_info":
+            await self.send(await _cache_payload(busy=self.jobs.running_count > 0))
+
+        elif cmd == "cache_clear":
+            # 有任务在跑就别清：正在写的 MinerU 产物 / 断点续传 DB 被删掉，
+            # 轻则当前这一步报错，重则 DB 状态与磁盘对不上。
+            running = self.jobs.running_count
+            if running > 0:
+                raise CommandError(
+                    f"还有 {running} 个任务在运行，请先停止（或等它跑完）再清除缓存")
+            freed, errors = await _run_blocking(clear_cache)
+            log(f"[backend] 清除缓存：释放 {_human_bytes(freed)}"
+                + (f"，{len(errors)} 项没删掉" if errors else ""))
+            await self.send(await _cache_payload(freed=freed, errors=errors))
+
         else:
             log(f"[backend] 未知命令：{cmd}")
 
 
+async def _run_blocking(fn, *args):
+    """在线程池里跑一个同步函数，别阻塞事件循环。
+
+    统计缓存大小要递归遍历几百上千个文件、清缓存要真删 —— 放在事件循环里会让后端
+    在这段时间收不到任何消息（前端看着就像卡死了）。
+    """
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, functools.partial(fn, *args))
+
+
+async def _cache_payload(freed: int = -1, errors: "list[str] | None" = None,
+                         busy: bool = False) -> dict:
+    """缓存状态快照。`freed` 只在刚清完之后传（-1 = 纯查询）。"""
+    total, files = await _run_blocking(cache_size)
+    payload = {
+        "type": "cache_info",
+        "path": str(CACHE_ROOT),      # 通用取法见 dsctl/cache.py（tempfile.gettempdir()）
+        "bytes": total,
+        "files": files,
+        "busy": busy,
+    }
+    if freed >= 0:
+        payload["freed"] = freed
+    if errors:
+        payload["errors"] = errors
+    return payload
+
+
+def _human_bytes(n: float) -> str:
+    """人类可读的体积。只用于**后端自己的日志** —— 给前端的仍是原始字节数。"""
+    units = ["B", "KB", "MB", "GB", "TB"]
+    i = 0
+    while n >= 1024.0 and i < len(units) - 1:
+        n /= 1024.0
+        i += 1
+    return f"{int(n)} {units[i]}" if i == 0 else f"{n:.1f} {units[i]}"
+
+
 async def _probe_env() -> dict:
     """探一眼运行环境，供「关于 / 诊断」展示（不阻塞事件循环）。"""
-    loop = asyncio.get_running_loop()
 
     def _run() -> dict:
         import shutil
@@ -658,7 +717,7 @@ async def _probe_env() -> dict:
             "project_root": str(PROJECT_ROOT),
         }
 
-    return await loop.run_in_executor(None, _run)
+    return await _run_blocking(_run)
 
 
 def _schedule_linger_exit() -> None:
