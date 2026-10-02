@@ -108,7 +108,7 @@ run_godot_gui_example.bat            # 复制为 run_godot_gui.bat 改好路径�
 - 每个 PDF 是**独立子进程**跑流水线，并行模式下文件行下会展开「第 N 章」子行，
   父行只显示 等待中 / 工作中 / 完成 / 部分失败。
 - 「停止」杀整棵进程树（含 MinerU），不会留下占显存的孤儿进程。
-- 工作页第二行的开关（强制重解析 / 并行翻译 / 仅解析 / 输出warning / 分章输出）
+- 工作页第二行的开关（强制重解析 / 仅解析 / 自动分章 / 分章输出 / 输出warning）
   只影响**这一次运行**，不写回 `config.json`。
 - 细节与开发约定见 [`godot_gui/README.md`](godot_gui/README.md) 与 `godot_gui/CLAUDE.md`。
 
@@ -153,7 +153,7 @@ MIN_MARKER_RETENTION=0.95
 
 MINERU_BACKEND=hybrid-engine
 MINERU_EFFORT=medium
-MINERU_TIMEOUT=1800
+MINERU_STALL_TIMEOUT=900
 
 ENABLE_PARALLEL=true
 MAX_PARALLEL_WORKERS=64
@@ -175,8 +175,8 @@ ENABLE_INTEGRITY=true
 | `MIN_MARKER_RETENTION` | marker 保留率阈值 | `0.95` |
 | `MINERU_BACKEND` | `pipeline` / `hybrid-engine` / `vlm-engine` | `hybrid-engine` |
 | `MINERU_EFFORT` | hybrid 强度 `medium` / `high` | `medium` |
-| `MINERU_TIMEOUT` | 单次超时（秒） | `1800` |
-| `ENABLE_PARALLEL` | 并行翻译 | `true` |
+| `MINERU_STALL_TIMEOUT` | 停滞超时（秒）：连续这么久没有新输出才判卡死，`0`=禁用 | `900` |
+| `ENABLE_PARALLEL` | 自动分章（含书签时按书签拆章） | `true` |
 | `MAX_PARALLEL_WORKERS` | 翻译并发数 | `64` |
 | `MAX_PARALLEL_MINERU` | MinerU 并发数（8 GB 显卡建议 1） | `1` |
 | `MAX_CHAPTER_PAGES` | 大章二次拆分阈值（页数），0=禁用 | `100` |

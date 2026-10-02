@@ -254,7 +254,7 @@ _CONFIG_SCHEMA: dict[str, tuple[str, type]] = {
     "api.base_url": ("api", str),
     "parser.backend": ("parser", str),
     "parser.effort": ("parser", str),
-    "parser.timeout": ("parser", int),
+    "parser.stall_timeout": ("parser", int),
     "parallel.enable": ("parallel", bool),
     "parallel.max_workers": ("parallel", int),
     "parallel.max_mineru": ("parallel", int),
@@ -522,10 +522,15 @@ async def _kill_tree(pid: int) -> None:
             proc = await asyncio.create_subprocess_exec(
                 "taskkill", "/PID", str(pid), "/T", "/F",
                 stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
                 creationflags=CREATE_NO_WINDOW,
             )
-            await proc.wait()
+            _, err = await proc.communicate()
+            if proc.returncode != 0:
+                # 128 = 进程已经不存在（自己退了，正常）；别的返回码要能看见原因，
+                # 否则「点了停止没反应」只能靠猜。
+                detail = (err or b"").decode("utf-8", "replace").strip()
+                log(f"[backend] taskkill pid={pid} 返回 {proc.returncode}：{detail}")
         else:
             os.kill(pid, 15)
     except OSError as exc:

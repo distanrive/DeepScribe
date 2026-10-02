@@ -28,7 +28,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "parser": {
         "backend": _cfg.MINERU_BACKEND,
         "effort": _cfg.MINERU_EFFORT,
-        "timeout": _cfg.MINERU_TIMEOUT,
+        # 停滞超时（秒），0 = 禁用。旧键名是 `timeout`（总时长上限），语义已改，
+        # 老配置里的那个值会被忽略（两个数字含义不同，不能直接迁移）。
+        "stall_timeout": _cfg.MINERU_STALL_TIMEOUT,
     },
     "translation": {
         "max_tokens": _cfg.MAX_TOKENS,
@@ -243,7 +245,7 @@ class ConfigManager:
             "REASONING_EFFORT": self.get("api", "reasoning_effort"),
             "MINERU_BACKEND": self.get("parser", "backend"),
             "MINERU_EFFORT": self.get("parser", "effort"),
-            "MINERU_TIMEOUT": str(self.get("parser", "timeout")),
+            "MINERU_STALL_TIMEOUT": str(self.get("parser", "stall_timeout")),
             "TARGET_TOKENS_PER_CALL": str(self.get("translation", "target_tokens_per_call")),
             "MAX_PARAS_PER_CALL": str(self.get("translation", "max_paras_per_call")),
             "MIN_MARKER_RETENTION": str(self.get("translation", "min_marker_retention")),

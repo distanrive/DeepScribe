@@ -49,7 +49,7 @@ var _chk_chapters: CheckBox
 var _files: Dictionary = {}
 ## 右键菜单当前作用在哪一行（空串 = 还没弹过）。
 var _menu_path := ""
-## 「并行翻译」被用户在本窗口手动动过 —— 之后不再用后端配置的默认值盖掉它。
+## 「自动分章」被用户在本窗口手动动过 —— 之后不再用后端配置的默认值盖掉它。
 var _parallel_user_locked := false
 ## 正在程序性地写勾选框（此时 `toggled` 回调不该记成「用户手动改的」）。
 var _setting_checks := false
@@ -71,7 +71,7 @@ func _ready() -> void:
 	_sync_config()
 
 
-## 把「并行翻译」的默认值对齐后端配置（config.py 是唯一默认值源，前端不硬编码）。
+## 把「自动分章」的默认值对齐后端配置（config.py 是唯一默认值源，前端不硬编码）。
 ##
 ## 何时调：连上后端时、以及**每次真正下发任务之前** —— 多开窗口时配置可能已被别的
 ## 前端改过，执行前对齐一次才不会拿旧值跑。用户在本窗口手动动过这个勾选框就不再覆盖。
@@ -149,22 +149,28 @@ func _build_ui() -> void:
 	root.add_child(_toolbar_row([_btn_start_all, _btn_stop_all, _btn_clear_all]))
 
 	# ---- 工具栏第二行：逐次运行的开关 ----
+	# 顺序按「从粗到细」排：先决定要不要重来（强制重解析）、要不要翻译（仅解析），
+	# 再决定怎么切（自动分章）、输出什么（分章输出 / 输出warning）。
 	_chk_force = _make_check("强制重解析",
 			"重新运行 MinerU 解析，忽略已缓存结果。\n切换解析后端（如 pipeline→hybrid-engine）后需勾选。")
-	_chk_parallel = _make_check("并行翻译",
-			"PDF 含书签时按章节并行翻译；无书签自动退回串行")
 	_chk_parse_only = _make_check("仅解析",
 			"只运行 MinerU 解析并输出 {文件名}_parsed.md，跳过翻译（省 API 费用）")
+	# 这一项控制的是**切分**（按书签拆章），不是「翻译要不要并行」——
+	# 翻译本来就是并发的（「最大翻译并发」，默认 64）；解析的并发是「最大解析并发」，
+	# 默认 1（= 整本/逐章串行），调大才是并行解析。名字必须说清这件事。
+	_chk_parallel = _make_check("自动分章",
+			"PDF 含书签时按书签自动切成章节、逐章解析；无书签则整本处理。\n"
+			+ "它只决定「怎么切」：翻译并发见「最大翻译并发」，解析并发见「最大解析并发」。")
+	_chk_chapters = _make_check("分章输出",
+			"自动分章时额外把每一章写成 output/part/{序号}_{标题}.md")
+	_chk_chapters.button_pressed = true
 	_chk_warnings = _make_check("输出warning",
 			"输出 {文件名}_warnings.md（标题修正 / 完整性校验的告警清单）")
 	_chk_warnings.button_pressed = true
-	_chk_chapters = _make_check("分章输出",
-			"并行模式下额外把每一章写成 output/part/{序号}_{标题}.md")
-	_chk_chapters.button_pressed = true
-	# 「分章输出」只在并行模式下有意义：串行模式没有分章概念，勾了也不生效
+	# 「分章输出」只在自动分章时才有意义：没切章就没有「每一章」可输出
 	_chk_parallel.toggled.connect(_on_parallel_toggled)
 	root.add_child(_toolbar_row([
-		_chk_force, _chk_parallel, _chk_parse_only, _chk_warnings, _chk_chapters,
+		_chk_force, _chk_parse_only, _chk_parallel, _chk_chapters, _chk_warnings,
 	]))
 
 	# ---- 日志 ----
@@ -231,11 +237,12 @@ func _build_row_menu() -> PopupMenu:
 	menu.add_check_item("跟随全局设置", MENU_FOLLOW)
 	menu.set_item_tooltip(0, "清除本文件的单独设置，重新跟随工具栏上的勾选")
 	menu.add_separator()
+	# 顺序与文案都跟工具栏那一行保持一致（同一个概念在两处叫法不同最容易出岔子）
 	menu.add_check_item("强制重解析", MENU_FORCE)
-	menu.add_check_item("并行翻译", MENU_PARALLEL)
 	menu.add_check_item("仅解析", MENU_PARSE_ONLY)
-	menu.add_check_item("输出warning", MENU_WARNINGS)
+	menu.add_check_item("自动分章", MENU_PARALLEL)
 	menu.add_check_item("分章输出", MENU_CHAPTERS)
+	menu.add_check_item("输出warning", MENU_WARNINGS)
 	# 勾选态与置灰状态每次弹出前重算（见 _refresh_row_menu）——数据变了，菜单不会自己跟着走
 	menu.about_to_popup.connect(_refresh_row_menu)
 	menu.id_pressed.connect(_on_menu_pressed)
@@ -249,12 +256,12 @@ func _on_parallel_toggled(_pressed: bool) -> void:
 	_refresh_chapter_enabled()
 
 
-## 「并行翻译」没勾时「分章输出」不可选：串行模式没有分章这一步，勾了也不生效。
+## 「自动分章」没勾时「分章输出」不可选：没切章就没有「每一章」可输出。
 func _refresh_chapter_enabled() -> void:
-	var parallel := _chk_parallel.button_pressed
-	_chk_chapters.disabled = not parallel
-	_chk_chapters.tooltip_text = ("并行模式下额外把每一章写成 output/part/{序号}_{标题}.md"
-			if parallel else "需先勾选「并行翻译」——串行模式没有分章这一步")
+	var auto_split := _chk_parallel.button_pressed
+	_chk_chapters.disabled = not auto_split
+	_chk_chapters.tooltip_text = ("自动分章时额外把每一章写成 output/part/{序号}_{标题}.md"
+			if auto_split else "需先勾选「自动分章」——没切章就没有「每一章」可输出")
 
 
 # ================================================================ 单文件选项
@@ -375,20 +382,52 @@ func _create_file_row(path: String) -> void:
 	_set_row_actions(path)
 
 
+## 这一行能不能「开始」。
+##
+## 三种情况都不能：**正在跑的**、**已经成功完成的**（输出已经在那儿，再点只会白跑
+## 一遍解析/翻译），以及**状态未知的**。失败 / 部分失败 / 已取消**仍可重跑** ——
+## 那些正是最需要「再试一次」的行，别一起锁掉。
+##
+## `_set_row_actions()` 与 `_on_start_all()` 都走这一个判据，免得「按钮灰了但
+## 「全部开始」还能带上它」这种前后不一致。
+func _can_start(info: Dictionary) -> bool:
+	if info.is_empty() or info["running"]:
+		return false
+	return info["status"] != DsProto.STATUS_DONE
+
+
 ## 行内按钮配置。**每次状态变化都要重配** —— 按钮只认 uid，不会跟着行数据走。
 func _set_row_actions(path: String) -> void:
 	var info: Dictionary = _files.get(path, {})
 	if info.is_empty():
 		return
 	var running: bool = info["running"]
+	var can_start := _can_start(info)
 	_table.set_item_actions(info["item"], COL_ACTION, [
 		{"text": "开始", "action": "start", "variation": "CellSuccessButton",
-			"disabled": running, "tooltip": "开始处理这个 PDF"},
+			"disabled": not can_start,
+			"tooltip": "开始处理这个 PDF" if can_start else _start_disabled_reason(info)},
 		{"text": "停止", "action": "stop", "variation": "CellDangerButton",
 			"disabled": not running, "tooltip": "终止这个文件的流水线（连同 MinerU 子进程）"},
 		{"text": "删除", "action": "remove", "variation": "CellButton",
 			"tooltip": "从列表里移除（运行中会先停止）"},
 	])
+
+
+## 「开始」为什么按不了（悬停时说明白，别让用户以为是坏了）。
+func _start_disabled_reason(info: Dictionary) -> String:
+	if info["running"]:
+		return "已经在处理中"
+	return "已经完成（输出已生成）。要重跑请先「删除」再从列表添加这个文件"
+
+
+## 「全部开始」用的判据（与行内按钮同一个 `_can_start()`）。
+func _startable_paths() -> Array:
+	var out: Array = []
+	for path in _files.keys():
+		if _can_start(_files[path]):
+			out.append(path)
+	return out
 
 
 func _set_status(path: String, status: String) -> void:
@@ -466,9 +505,8 @@ func _remove_file(path: String) -> void:
 
 func _on_start_all() -> void:
 	_sync_config()          # 执行前对齐一次配置（见 _sync_config）—— 整批只发一次
-	for path in _files.keys():
-		if not _files[path]["running"]:
-			_start_file(path)
+	for path in _startable_paths():
+		_start_file(path)
 
 
 func _on_stop_all() -> void:
@@ -520,7 +558,7 @@ func _on_backend_message(payload: Variant) -> void:
 			_append_log("system", "ERROR", str(msg.get("message", "")))
 
 
-## 用后端配置里的 `parallel.enable` 对齐「并行翻译」勾选框（后端配置是唯一默认值源）。
+## 用后端配置里的 `parallel.enable` 对齐「自动分章」勾选框（后端配置是唯一默认值源）。
 ##
 ## 连接时、每次执行前都会各推一份，所以多开窗口时这里是跟随最新配置的；
 ## 但用户在本窗口手动动过这个勾选框之后就不再覆盖（`_parallel_user_locked`）。
@@ -622,8 +660,6 @@ func _on_job_finished(path: String, ok: bool, cancelled: bool) -> void:
 	if info.is_empty():
 		return          # 已经被「删除」移出列表了
 	info["running"] = false
-	_set_row_actions(path)
-	_refresh_buttons()
 	if cancelled:
 		_set_status(path, DsProto.STATUS_CANCELLED)
 		_append_log(path, "INFO", "已停止")
@@ -636,6 +672,11 @@ func _on_job_finished(path: String, ok: bool, cancelled: bool) -> void:
 	else:
 		_set_status(path, DsProto.STATUS_ERROR)
 		_append_log(path, "ERROR", "处理失败，详见上方日志")
+	# **必须在状态落定之后**：按钮可用性与「全部开始」的可用性都依赖状态
+	# （已完成的行不给再「开始」）。放在上面就会配出一个「已完成、但「开始」还亮着」的行
+	# —— 而且它再也不会被刷新回来。
+	_set_row_actions(path)
+	_refresh_buttons()
 
 
 # ================================================================ 日志
@@ -678,13 +719,12 @@ func append_external_log(level: String, text: String) -> void:
 func _refresh_buttons() -> void:
 	var total := _files.size()
 	var running := 0
-	var idle := 0
 	for info in _files.values():
 		if info["running"]:
 			running += 1
-		else:
-			idle += 1
-	_btn_start_all.disabled = idle == 0
+	# 「全部开始」按**能开始的**算，不是按「没在跑的」算 —— 否则全跑完之后它会亮着，
+	# 点下去什么也不做（已完成的那些被 `_can_start()` 挡掉了）。
+	_btn_start_all.disabled = _startable_paths().is_empty()
 	_btn_stop_all.disabled = running == 0
 	_btn_clear_all.disabled = total == 0
 

@@ -20,7 +20,15 @@ MINERU_BACKEND = os.getenv("MINERU_BACKEND", "hybrid-engine")
 # hybrid-engine 后端的解析强度：medium（更快）| high（更准，含 image analysis）
 MINERU_EFFORT = os.getenv("MINERU_EFFORT", "medium")
 SUPPORTED_PDF_EXTS = (".pdf",)
-MINERU_TIMEOUT = int(os.getenv("MINERU_TIMEOUT", "1800"))  # MinerU 单次运行超时（秒）
+# MinerU 停滞超时（秒）：**连续这么久没有任何新输出**才判定卡死并终止它。
+# 0 = 禁用（完全靠界面上的「停止」按钮）。
+#
+# 注意这不是「总用时上限」。原先是 `MINERU_TIMEOUT=1800`（总时长超 30 分钟就杀），
+# 实测把一章跑到 100%、只差落盘的解析活活杀掉（那本书各章耗时从 3 分钟到 30+ 分钟
+# 不等，任何固定墙钟数字对某些章都必然是错的）；误杀还留下过占 4.5 GB 的孤儿进程。
+# 只要 MinerU 在干活就一直在吐进度（一章能刷 400 多次），所以「长时间完全没输出」
+# 才是可靠的卡死信号。
+MINERU_STALL_TIMEOUT = int(os.getenv("MINERU_STALL_TIMEOUT", "900"))
 
 # --- MD 翻译设置 ---
 # 单次 API 调用目标 token 数（输入侧）。
@@ -37,12 +45,12 @@ MAX_PARAS_PER_CALL = int(os.getenv("MAX_PARAS_PER_CALL", "200"))
 # 设为 1.0 可禁用自适应调节
 MIN_MARKER_RETENTION = float(os.getenv("MIN_MARKER_RETENTION", "0.95"))
 
-# --- 并行翻译设置 ---
-# 开启后，若 PDF 存在多级书签则按最大章节切分并行翻译
+# --- 并行/分章设置 ---
+# 开启后，若 PDF 存在多级书签则按书签自动切成章节（GUI 里叫「自动分章」）
 # 无书签或仅一级书签时自动退回串行
 ENABLE_PARALLEL = os.getenv("ENABLE_PARALLEL", "true").lower() in ("true", "1", "yes")
 
-# 并行翻译最大并发数（受 API rate limit 约束）
+# 翻译最大并发数（受 API rate limit 约束）—— 翻译是轻任务，本来就是并发的
 MAX_PARALLEL_WORKERS = int(os.getenv("MAX_PARALLEL_WORKERS", "64"))
 
 # MinerU 阶段最大并发数（串行=1；GPU 显存充足可调至 2-3）

@@ -24,6 +24,18 @@ def all_gd_files() -> list[Path]:
     return sorted(SCRIPTS.rglob("*.gd"))
 
 
+def _func_body(src: str, name: str) -> str:
+    """取某个函数的函数体（顶格的 `func <name>(` 到下一个顶格 `func` 之间）。
+
+    粗切即可：GDScript 的函数体一律缩进，所以按顶格 `func ` 切是可靠的。
+    找不到时返回空串（调用方 assertIn 会直接报错，比抛异常更好读）。
+    """
+    for part in re.split(r"\n(?=func )", src):
+        if re.match(rf"func {re.escape(name)}\(", part):
+            return part
+    return ""
+
+
 # emoji / 装饰性图形符号区段（要求：界面不许用表情图标）。
 #
 # 刻意**不含** 0x2190-0x21FF（← ↑ → ↓）与 0x2018-0x201F 这类：它们是中文排版里的
@@ -114,21 +126,26 @@ class TestRenamedLabels(unittest.TestCase):
     def test_work_page_labels(self):
         src = read("scripts/pages/work_page.gd")
         self.assertIn('"强制重解析"', src)
-        self.assertIn('"并行翻译"', src)
+        self.assertIn('"自动分章"', src)
         self.assertIn('"仅解析"', src)
         self.assertIn('"输出warning"', src)
         self.assertIn('"分章输出"', src)
         # 旧文案不许再出现
         self.assertNotIn("强制重新解析", src)
         self.assertNotIn("启用并行翻译", src)
+        # 「并行翻译」这个叫法是错的：这一项控制的是**按书签切章**，
+        # 翻译本来就是并发的（「最大翻译并发」），解析并发是「最大解析并发」。
+        # 它在工具栏和右键菜单里都得叫「自动分章」。
+        self.assertNotIn('"并行翻译"', src)
 
     def test_config_page_labels(self):
         src = read("scripts/pages/config_page.gd")
         self.assertIn('g.title = "并行设置"', src)
         self.assertIn('"最大翻译并发"', src)
-        self.assertIn('"解析最大并发"', src)
+        self.assertIn('"最大解析并发"', src)
         self.assertNotIn("并行翻译设置", src)
         self.assertNotIn("最大并发线程数", src)
+        self.assertNotIn('"解析最大并发"', src)
 
     def test_about_page_license_and_stack(self):
         src = read("scripts/pages/about_page.gd")
@@ -148,10 +165,59 @@ class TestWorkPageDetails(unittest.TestCase):
         # 「全部开始」要和行内那个绿色的「开始」同色系
         self.assertIn('_make_button("全部开始", "SuccessButton"', self.src)
 
-    def test_chapters_follow_parallel(self):
-        # 「并行翻译」没勾时「分章输出」必须不可选：串行模式没有分章这一步。
+    def test_chapters_follow_auto_split(self):
+        # 「自动分章」没勾时「分章输出」必须不可选：没切章就没有「每一章」可输出。
         self.assertIn("_chk_parallel.toggled.connect", self.src)
-        self.assertIn("_chk_chapters.disabled = not parallel", self.src)
+        self.assertIn("_chk_chapters.disabled = not auto_split", self.src)
+
+    def test_toolbar_switch_order(self):
+        """第二行开关的顺序是需求点名的：强制重解析 → 仅解析 → 自动分章 → 分章输出 → 输出warning。"""
+        rows = re.findall(r"_toolbar_row\(\[([^\]]*)\]\)", self.src, re.S)
+        with_checks = [r for r in rows if "_chk_" in r]
+        self.assertEqual(len(with_checks), 1, "没找到那唯一一行勾选框，或匹配到了别的行")
+        order = re.findall(r"_chk_\w+", with_checks[0])
+        self.assertEqual(
+            order,
+            ["_chk_force", "_chk_parse_only", "_chk_parallel",
+             "_chk_chapters", "_chk_warnings"],
+            "工作页开关的顺序变了（需求：强制重解析 / 仅解析 / 自动分章 / 分章输出 / 输出warning）")
+
+    def test_completed_rows_cannot_restart(self):
+        """已完成的任务，「开始」与「停止」都不可选。
+
+        关键在**判据只有一处**：行内按钮和「全部开始」都走 `_can_start()`，
+        否则会出现「按钮灰着、但点「全部开始」还是把它带上」这种自相矛盾。
+        （失败 / 部分失败 / 已取消**不锁** —— 那些正是最需要重跑的行。）
+        """
+        self.assertIn("DsProto.STATUS_DONE", self.src)
+        self.assertIn("func _can_start(", self.src, "判据本身没了")
+
+        # 判据只有一处（_can_start），两个消费方各自从它出发：
+        #   行内按钮 → _can_start()
+        #   「全部开始」→ _startable_paths() → _can_start()
+        self.assertIn("_can_start(", _func_body(self.src, "_set_row_actions"),
+                      "行内按钮没用 _can_start() 判可用性")
+        self.assertIn("_startable_paths()", _func_body(self.src, "_on_start_all"),
+                      "「全部开始」没走 _startable_paths()")
+        self.assertIn("_can_start(", _func_body(self.src, "_startable_paths"),
+                      "_startable_paths() 绕过了 _can_start()")
+
+    def test_row_actions_refreshed_after_status(self):
+        """按钮要在**状态落定之后**再配。
+
+        这条差点就写错了：`_on_job_finished()` 原本先 `_set_row_actions()` 再
+        `_set_status()`，而 `_can_start()` 判的是状态 —— 于是任务成功结束后，
+        「开始」仍然亮着，而且再没有任何时机去刷新它（`_set_status()` 不碰按钮，
+        每次进度都重建按钮又太浪费）。顺序反了就静默出错，所以钉住。
+        """
+        body = _func_body(self.src, "_on_job_finished")
+        i_status = body.find("_set_status(")
+        i_actions = body.find("_set_row_actions(")
+        self.assertNotEqual(i_status, -1, "_on_job_finished 里没有 _set_status()")
+        self.assertNotEqual(i_actions, -1, "_on_job_finished 里没有 _set_row_actions()")
+        self.assertLess(
+            i_status, i_actions,
+            "先配按钮、后定状态 —— 会配出「已完成但『开始』还亮着」的行")
 
     def test_rows_have_per_file_options(self):
         # 右键菜单改的是**单个文件**的运行选项，执行时要按行取，而不是读全局勾选框。

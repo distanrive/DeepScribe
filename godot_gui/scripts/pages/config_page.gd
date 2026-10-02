@@ -24,7 +24,8 @@ var _effort_combo: OptionButton
 var _thinking_check: CheckBox
 var _backend_combo: OptionButton
 var _parser_effort_combo: OptionButton
-var _timeout_spin: SpinBox
+var _stall_spin: SpinBox
+var _stall_hint: Label
 var _workers_spin: SpinBox
 var _mineru_spin: SpinBox
 var _chapter_pages_spin: SpinBox
@@ -205,10 +206,19 @@ func _build_parser_group() -> TitledGroup:
 	row.add_child(_parser_effort_combo)
 	row.add_child(_gap(20))
 
-	row.add_child(_label("超时（秒）"))
-	_timeout_spin = _spin(60, 7200, 1)
-	_timeout_spin.tooltip_text = "单次 MinerU 运行的超时时间"
-	row.add_child(_timeout_spin)
+	# 停滞超时，**不是**总用时上限 —— 见 config.py 里 MINERU_STALL_TIMEOUT 的注释：
+	# 按总时长限制会把「慢但正常」的大章误杀（实测一章跑到 100% 只差落盘时被杀）。
+	row.add_child(_label("停滞超时（秒）"))
+	_stall_spin = _spin(0, 14400, 60)
+	_stall_spin.tooltip_text = ("连续这么久没有任何新输出，才判定 MinerU 卡死并终止它。\n"
+			+ "0 = 不检测，完全靠「停止」按钮。\n"
+			+ "注意这不是「总用时上限」：大章跑 30 分钟以上是正常的，"
+			+ "按总时长限制会把快跑完的任务误杀。")
+	_stall_spin.value_changed.connect(func(_v): _refresh_stall_hint())
+	row.add_child(_stall_spin)
+	_stall_hint = Label.new()
+	_stall_hint.theme_type_variation = "Caption"
+	row.add_child(_stall_hint)
 	row.add_child(_stretch())
 	box.add_child(row)
 
@@ -227,7 +237,7 @@ func _build_parallel_group() -> TitledGroup:
 	row.add_child(_workers_spin)
 	row.add_child(_gap(20))
 
-	row.add_child(_label("解析最大并发"))
+	row.add_child(_label("最大解析并发"))
 	_mineru_spin = _spin(1, 8, 1)
 	_mineru_spin.tooltip_text = ("同时跑几个 MinerU（跨文件全局限制）\n"
 			+ "1 = 串行（安全稳定）\n"
@@ -415,7 +425,7 @@ func _form_state() -> Dictionary:
 		"thinking": _thinking_check.button_pressed,
 		"backend": _backend_combo.get_item_text(_backend_combo.selected),
 		"parser_effort": _parser_effort_combo.get_item_text(_parser_effort_combo.selected),
-		"timeout": int(_timeout_spin.value),
+		"stall_timeout": int(_stall_spin.value),
 		"workers": int(_workers_spin.value),
 		"mineru": int(_mineru_spin.value),
 		"chapter_pages": int(_chapter_pages_spin.value),
@@ -521,7 +531,8 @@ func _apply_config(msg: Dictionary) -> void:
 
 	_select_combo(_backend_combo, str(parser.get("backend", "")))
 	_select_combo(_parser_effort_combo, str(parser.get("effort", "")))
-	_timeout_spin.value = float(parser.get("timeout", 1800))
+	_stall_spin.value = float(parser.get("stall_timeout", 900))
+	_refresh_stall_hint()
 
 	_workers_spin.value = float(parallel.get("max_workers", 64))
 	_mineru_spin.value = float(parallel.get("max_mineru", 1))
@@ -569,6 +580,10 @@ func _current_model() -> String:
 	return text
 
 
+func _refresh_stall_hint() -> void:
+	_stall_hint.text = "不检测卡死" if _stall_spin.value <= 0.0 else ""
+
+
 func _refresh_chapter_hint() -> void:
 	_chapter_pages_hint.text = "禁用" if _chapter_pages_spin.value <= 0.0 else ""
 
@@ -600,7 +615,7 @@ func _on_save() -> void:
 		"parser": {
 			"backend": _backend_combo.get_item_text(_backend_combo.selected),
 			"effort": _parser_effort_combo.get_item_text(_parser_effort_combo.selected),
-			"timeout": int(_timeout_spin.value),
+			"stall_timeout": int(_stall_spin.value),
 		},
 		"parallel": {
 			"max_workers": int(_workers_spin.value),
