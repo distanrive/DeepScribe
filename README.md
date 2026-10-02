@@ -1,5 +1,9 @@
 # DeepScribe — PDF to Translated Markdown
 
+<p align="center">
+  <img src="icon.png" width="128" alt="DeepScribe 图标：一页 PDF（右上折角）上叠着「T」与「文」">
+</p>
+
 学术 PDF 英文→中文翻译流水线。MinerU 解析 PDF 为 Markdown，DeepSeek API 批量翻译，输出中英双语 MD。
 
 > **基于 [MinerU](https://github.com/opendatalab/MinerU)**（Apache 2.0）进行 PDF 解析。
@@ -23,7 +27,7 @@
 - **断点续传** — SQLite 缓存译文（UPSERT，内容变化自动重置），中断重跑不重复翻译
 - **表格完整还原** — HTML 表格自动转 Markdown，rowspan/colspan 展开，表格内图片行内化
 - **批处理** — 递归扫描输入目录，镜像输出结构，单文件失败不中止批次
-- **仅解析模式** — 只跑 MinerU 解析并输出 `{stem}_parsed.md`，跳过翻译（零 API 费用）；启用并行 + 有书签时按章节并发解析
+- **仅解析模式** — 只跑 MinerU 解析并输出 `{stem}_parsed.md`，跳过翻译（零 API 费用）；勾选"自动分章"且 PDF 含书签时按章节并发解析，并可另出分章副本。与翻译模式走同一套输出侧后处理（表格转换、归一化、图片去重）
 
 ## 环境配置
 
@@ -124,7 +128,7 @@ run_godot_gui_example.bat            # 复制为 run_godot_gui.bat 改好路径�
 - "停止" 会终止该文件的子进程树（`taskkill /T /F`，包括 MinerU），真正中断任务。
 - 勾选 **"强制重解析"** 可忽略缓存重新解析（切换解析后端后需要）。
 - 勾选 **"仅解析"** 只跑 MinerU 解析并输出 `{stem}_parsed.md`，跳过翻译（省 API 费用）；启用并行 + 有书签时按章节并发解析。
-- 勾选 **"输出warning"** / **"分章输出"** 控制是否写 `{stem}_warnings.md` 与 `output/part/`（默认都写）。
+- 勾选 **"输出warning"** / **"分章输出"** 控制是否写 `{stem}_warnings.md` 与 `output/part/`（默认都写）；**"分章输出" 在"仅解析"下同样生效**（各章独立 md + 各自的图片目录）。
 - 多文件同时处理时，MinerU 受全局并发限制（`MAX_PARALLEL_MINERU`，默认 1），避免 8 GB 显卡显存 OOM。
 - 配置页「高级配置」显示**缓存占用**（`%TEMP%\DeepScribe` 下的 MinerU 解析产物与断点续传进度）并可一键清除；
   有任务在跑时会拒绝清除，避免删掉正在写的中间产物。

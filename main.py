@@ -1252,11 +1252,15 @@ def _parse_pdf_to_md(pdf_path: Path, output_dir: Path, temp_dir: Path,
 
 def _parse_only(pdf_path: Path, output_dir: Path, temp_dir: Path,
                 _stem: str, force: bool, mineru_lock,
-                progress_callback, parallel: bool) -> None:
+                progress_callback, parallel: bool,
+                output_chapters: bool = True) -> None:
     """仅解析：MinerU → 规范化 → 图片处理 → 输出 {stem}_parsed.md，跳过翻译。
 
     有书签且启用并行时，按章节拆分并用 MAX_PARALLEL_MINERU 并发解析；
     否则串行解析整篇。
+
+    output_chapters: 是否写 output/part/ 各章副本。**只在按章拆分那条路才有意义**
+    —— 没切章就没有「每一章」可输出（与并行翻译那边一致）。
     """
     if parallel:
         bookmarks, total_pages = extract_bookmarks(pdf_path)
@@ -1264,7 +1268,7 @@ def _parse_only(pdf_path: Path, output_dir: Path, temp_dir: Path,
             try:
                 _parse_only_parallel(pdf_path, output_dir, temp_dir, _stem,
                                      bookmarks, total_pages, mineru_lock,
-                                     progress_callback)
+                                     progress_callback, output_chapters)
                 return
             except Exception as e:
                 logger.warning(f"并行解析失败 ({e})，退回串行解析")
@@ -1274,6 +1278,9 @@ def _parse_only(pdf_path: Path, output_dir: Path, temp_dir: Path,
     new_md, _ = _parse_pdf_to_md(pdf_path, output_dir, temp_dir, _stem,
                                   force, mineru_lock, progress_callback,
                                   asset_suffix="_parsed")
+    # 与翻译模式过同一套输出侧后处理（表格渲染修复 / HTML 表格转 MD / 归一化 /
+    # 相邻图片去重）。仅解析**也是正式产出**，没理由比翻译版脏一档。
+    new_md = _postprocess_md(new_md)
     out_path = output_dir / f"{pdf_path.stem}_parsed.md"
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(new_md)
@@ -1282,9 +1289,11 @@ def _parse_only(pdf_path: Path, output_dir: Path, temp_dir: Path,
 
 def _parse_only_parallel(pdf_path: Path, output_dir: Path, temp_dir: Path,
                          _stem: str, bookmarks, total_pages: int,
-                         mineru_lock, progress_callback) -> None:
+                         mineru_lock, progress_callback,
+                         output_chapters: bool = True) -> None:
     """仅解析的并行模式：按书签拆分 PDF，各章并发 MinerU（MAX_PARALLEL_MINERU），
-    合并为单个 {stem}_parsed.md + {stem}_parsed.assets/。"""
+    合并为单个 {stem}_parsed.md + {stem}_parsed.assets/；开启分章输出时，
+    另外把每一章写成 output/part/{NN}_{标题}.md（配各自的图片目录）。"""
     sub_pdfs_dir = temp_dir / f"{_stem}_parts"
     sub_pdfs = split_pdf_by_bookmarks(pdf_path, bookmarks, total_pages,
                                        sub_pdfs_dir, _stem,
@@ -1360,7 +1369,38 @@ def _parse_only_parallel(pdf_path: Path, output_dir: Path, temp_dir: Path,
     else:
         (output_dir / f"{pdf_path.stem}_parsed.assets").mkdir(parents=True, exist_ok=True)
 
-    # 清理 temp 中间文件
+    # 后处理（与翻译模式同一套）。位置与并行翻译那条路一致：**在图片处理之后、
+    # 分章输出之前** —— 分章文件要各自过一遍，合并版单独过一遍。
+    merged = _postprocess_md(merged)
+
+    # 分章输出 → PDF 所在目录。
+    # **必须放在合并那段之后**：上面那个循环要从 _part_dir 里读各章图片去合并，
+    # 而这里会把它们搬走。命名与搬移规则跟并行翻译那条路（L6 分章输出）保持一致，
+    # 免得分章目录在不同模式下长得不一样。
+    if output_chapters:
+        _out_part_dir = output_dir / "part"
+        _out_part_dir.mkdir(parents=True, exist_ok=True)
+        # 各章 md 引用的是 {_stem}_ch{i}_parsed.assets/…，而那些资产只在 temp 的 part
+        # 目录里 —— 不搬过去每个图都是死链（并行翻译那边踩过同一个坑）。
+        for i in range(len(sub_pdfs)):
+            _src = _part_dir / f"{_stem}_ch{i}_parsed.assets"
+            if not _src.is_dir():
+                continue
+            _dst = _out_part_dir / _src.name
+            try:
+                if _dst.exists():
+                    shutil.rmtree(_dst)
+                shutil.move(str(_src), str(_dst))
+            except OSError as e:
+                logger.warning(f"分章图片目录搬移失败 {_src} → {_dst}: {e}")
+        for i, (title, _sub) in enumerate(sub_pdfs):
+            safe = re.sub(r'[\\/:*?"<>|]', '_', title).strip()
+            part_path = _out_part_dir / f"{i:02d}_{safe}.md"
+            with open(part_path, "w", encoding="utf-8") as pf:
+                pf.write(_postprocess_md(results[i] or ""))
+        logger.info(f"分章输出: {len(sub_pdfs)} 章 → {_out_part_dir}")
+
+    # 清理 temp 中间文件（分章资产已搬走的 _part_dir 到这里只剩空壳）
     for _d in (_merged_img_dir, sub_pdfs_dir, _part_dir):
         try:
             shutil.rmtree(_d)
@@ -1465,7 +1505,7 @@ def process_pdf(pdf_path: Path, output_dir: Path | None = None,
     # --- 仅解析模式：只跑 MinerU + 规范化 + 图片处理，跳过翻译 ---
     if parse_only:
         _parse_only(pdf_path, output_dir, temp_dir, _stem, force,
-                    mineru_lock, progress_callback, parallel)
+                    mineru_lock, progress_callback, parallel, output_chapters)
         return
 
     # --- 并行模式检测（先于完整 PDF 的 MinerU，避免浪费）---

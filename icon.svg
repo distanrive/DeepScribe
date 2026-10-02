@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="ds-title">
+  <title id="ds-title">DeepScribe</title>
+  <desc>DeepScribe 图标：一页右上折角的文档，左上角英文 T、右下角汉字 文，纸面若干正文横线。</desc>
+
+  <!--
+    DeepScribe 图标（512×512）
+
+    构图：品牌蓝圆角方块 + 白色纸张（右上折角）+ 左上 T、右下 文 + 正文横线。
+      纸与横线 —— PDF 文档；T —— 英文原文那一侧；文 —— 中文译文。
+    字形：Noto Sans SC Bold（SIL OFL 1.1）真实字形，fontTools 取轮廓转 path，非手绘。
+      T  按 cap height 缩放：0.1294 × 741 = 95.9px，ink 视觉中心 x=182、基线 y=202；
+      文 ink 宽 94（左缘 x=282，基线 y=420）。
+      轮廓保留字体单位（upem=1000），靠 transform 里的 scale 缩放。
+      **不要改回 <text>**：Godot 的 SVG 光栅化器（ThorVG）不渲染文本元素，
+      改成 <text> 后界面里的图标会变成一片空白（实测过）。
+    横线：共 7 条，高 10、圆头，**全部落在 36px 基线网格上**
+      （y = 150/186/222/258/294/330/366）。左端有两种：通铺行起于 x=145（与 T 的 ink 左缘对齐），
+      T 右侧两行起于 x=237；右端有两种：通铺行止于 x=372，
+      右下方两行止于 x=270 —— 那里被「文」占着，收在它左侧 12px。
+      即：T 像一个段首大字，右侧接着正文；「文」落在末行的行末。
+    折角：从顶边 (x1-fold, y0) 折到右边 (x1, y0+fold)，折片是三角**直角**（不要加圆角 ——
+      加了会在纸面上露出一小片白，看着像贴上去的圆角贴纸而不是纸折过来），
+      折片色比纸面深一档 #CFE0F2，纸背的观感才出得来。
+    纸：288×392，圆角 24。高度从 336 加到 392 的原因：T（96）+ 间距 36 的横线 + 文（94）
+      在 336 里放不下 —— 要么横线挤回去，要么通铺的横线会压到右下的「文」。
+    配色：底板渐变取自 godot_gui/scripts/theme/theme_palette.gd。
+      底板 ACCENT 家族 #61A4E8 → #3C7FC8 → #275E9C；
+      T 与 文 一律 #1F2733（TEXT，黑墨）；横线 #98A1AC（TEXT_DIS）；折角面 #CFE0F2。
+  -->
+  <defs>
+    <linearGradient id="ds-tile" x1="0.15" y1="0" x2="0.85" y2="1">
+      <stop offset="0" stop-color="#61A4E8"/><stop offset="0.55" stop-color="#3C7FC8"/><stop offset="1" stop-color="#275E9C"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 底板 -->
+  <rect width="512" height="512" rx="104" fill="url(#ds-tile)"/>
+
+  <!-- 纸：288×392，圆角 24，右上折角 -->
+  <path d="M136 60 H328 L400 132 V428 A24 24 0 0 1 376 452 H136 A24 24 0 0 1 112 428 V84 A24 24 0 0 1 136 60 Z" fill="#FFFFFF"/>
+  <path d="M328 60 L400 132 L328 132 Z" fill="#CFE0F2"/>
+
+
+  <!-- 正文横线（36px 基线网格） -->
+  <g fill="#98A1AC">
+    <rect x="237" y="150" width="135" height="10" rx="5.0"/>
+    <rect x="237" y="186" width="135" height="10" rx="5.0"/>
+    <rect x="145" y="222" width="227" height="10" rx="5.0"/>
+    <rect x="145" y="258" width="227" height="10" rx="5.0"/>
+    <rect x="145" y="294" width="227" height="10" rx="5.0"/>
+    <rect x="145" y="330" width="125" height="10" rx="5.0"/>
+    <rect x="145" y="366" width="125" height="10" rx="5.0"/>
+  </g>
+
+  <!-- 原文侧：T -->
+  <g fill="#1F2733"><path transform="translate(141.6 202) scale(0.129400)" d="M238 0H386V-617H595V-741H30V-617H238Z"/></g>
+
+  <!-- 译文：文 -->
+  <g fill="#1F2733"><path transform="translate(279.5 420) scale(0.098532)" d="M412 -822C435 -779 458 -722 469 -681H44V-564H202C256 -423 326 -302 416 -202C312 -121 182 -64 25 -25C49 3 85 59 98 88C259 41 394 -26 505 -116C611 -27 740 39 898 81C916 48 952 -4 979 -31C828 -65 702 -125 598 -204C687 -301 755 -420 806 -564H960V-681H524L609 -708C597 -749 567 -813 540 -860ZM507 -286C430 -365 370 -459 326 -564H672C631 -454 577 -362 507 -286Z"/></g>
+</svg>

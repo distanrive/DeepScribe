@@ -16,6 +16,8 @@ compatibility/default_parent_skeleton_in_mesh_instance_3d=true
 
 config/name="DeepScribe"
 config/description="DeepScribe — PDF 学术翻译：Godot 前端 + Python 后端"
+config/icon="res://icon.svg"
+config/windows_native_icon="res://icon.ico"
 run/main_scene="res://scenes/app.tscn"
 config/features=PackedStringArray("4.7")
 
